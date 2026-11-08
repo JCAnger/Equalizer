@@ -4,8 +4,6 @@
 <dict>
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>Equalizer capture le son de Music pour le comparer à ce que les enceintes restituent.</string>
-	<key>NSAppleMusicUsageDescription</key>
-	<string>Equalizer lit un morceau de votre bibliothèque Musique pour le comparer à ce que les enceintes restituent.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_equalizerref._tcp</string>
