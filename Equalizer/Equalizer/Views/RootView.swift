@@ -1,16 +1,18 @@
 #if !os(macOS)
 import SwiftUI
 
-/// Lets the user choose what this iPhone/iPad does: listen with its microphone (analysis)
-/// or play the reference music (source).
+/// Permet de choisir ce que fait cet iPhone/iPad : écouter avec son microphone (analyse)
+/// ou jouer la musique de référence (source).
 struct RootView: View {
     private enum Role: String {
         case analysis
         case source
     }
 
+    /// Rôle mémorisé d'un lancement à l'autre ; une chaîne vide signifie « pas encore choisi ».
     @AppStorage("deviceRole") private var storedRole = ""
 
+    /// `nil` tant que l'utilisateur n'a pas choisi (ou si la valeur stockée est inconnue).
     private var role: Role? {
         Role(rawValue: storedRole)
     }
@@ -28,6 +30,7 @@ struct RootView: View {
         }
     }
 
+    /// Bouton flottant pour revenir au choix du rôle.
     private var changeRoleButton: some View {
         Button("Changer de rôle") { storedRole = "" }
             .glassButtonStyle()
@@ -36,6 +39,7 @@ struct RootView: View {
             .padding(.bottom, 8)
     }
 
+    /// Écran de premier lancement : deux gros boutons, un par rôle.
     private var roleChooser: some View {
         VStack(spacing: 20) {
             Text("Que fait cet appareil ?")

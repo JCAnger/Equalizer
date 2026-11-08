@@ -1,6 +1,6 @@
 import Foundation
 
-/// Verdict for a frequency zone, based on its deviation from the target curve.
+/// Verdict pour une zone de fréquences, selon son écart par rapport à la courbe cible.
 enum ResponseVerdict {
     case lacking
     case balanced
@@ -15,14 +15,14 @@ enum ResponseVerdict {
     }
 }
 
-/// Deviation (in dB) of one analysis band from the target curve.
+/// Écart (en dB) d'une bande d'analyse par rapport à la courbe cible.
 struct BandDeviation: Identifiable {
     let id: Int
     let centerFrequency: Double
     let deviation: Float
 }
 
-/// Average deviation of a named range of frequencies (sub-bass, bass, mids…).
+/// Écart moyen d'une plage de fréquences nommée (sub-graves, graves, médiums…).
 struct ZoneDeviation: Identifiable {
     let name: String
     let range: Range<Double>
@@ -32,30 +32,34 @@ struct ZoneDeviation: Identifiable {
     var id: String { name }
 }
 
+/// Résultat complet de l'analyse, prêt à être affiché par `ResponseAnalysisView`.
 struct FrequencyResponseReport {
     let bands: [BandDeviation]
     let zones: [ZoneDeviation]
-    /// Expected level (dB) per band: what the source sends, or the typical music spectrum.
+    /// Niveau attendu (dB) par bande : ce que la source envoie, ou le spectre typique de la musique.
     let expected: [Float]
-    /// Level (dB) per band heard by the microphone, shifted so it matches `expected`
-    /// on the mid range. The gap between the two curves is the deviation.
+    /// Niveau (dB) par bande entendu par le microphone, décalé pour coïncider avec `expected`
+    /// sur les médiums. L'écart entre les deux courbes est la déviation.
     let restituted: [Float]
 }
 
-/// Compares the long-term average spectrum of the music captured by the microphone
-/// with a typical music spectrum (a straight line of `targetSlope` dB per octave).
+/// Compare le spectre moyen à long terme de la musique captée par le microphone avec un
+/// spectre de musique typique (une droite de `targetSlope` dB par octave).
 ///
-/// Absolute levels are unknown (volume, mic gain), so the target is aligned on the mean
-/// level of the mid range. Deviations are therefore relative to the mids: a zone at
-/// -6 dB means "6 dB quieter than it should be compared to the mids".
+/// Les niveaux absolus sont inconnus (volume, gain du micro) : la cible est donc alignée sur
+/// le niveau moyen des médiums. Les écarts sont relatifs aux médiums : une zone à -6 dB
+/// signifie « 6 dB plus faible qu'elle ne devrait l'être par rapport aux médiums ».
 enum FrequencyResponseAnalysis {
-    /// Typical slope of the average spectrum of music, in dB per octave.
+    /// Pente typique du spectre moyen de la musique, en dB par octave.
     static let targetSlope: Float = -3
-    /// Deviations within ± this value are considered balanced, in dB.
+    /// Les écarts compris dans ± cette valeur sont jugés équilibrés, en dB.
     static let tolerance: Float = 3
 
+    /// Plage servant à aligner la cible sur la mesure. Les médiums sont choisis car ils
+    /// sont peu affectés par la pièce et par la réponse du microphone.
     private static let referenceRange = 250.0..<2_000.0
 
+    /// Zones de fréquences évaluées, en hertz. La dernière est ouverte vers l'infini.
     private static let zoneDefinitions: [(name: String, range: Range<Double>)] = [
         ("Sub-graves", 0..<60),
         ("Graves", 60..<250),
@@ -66,9 +70,14 @@ enum FrequencyResponseAnalysis {
         ("Aigus", 6_000..<Double.infinity)
     ]
 
-    /// - Parameter referenceLevels: average levels of what the source sends to the speakers
-    ///   (same band layout as `averageLevels`). When `nil` or mismatched, the typical music
-    ///   spectrum (`targetSlope`) is used as the target instead.
+    /// Calcule l'écart de chaque bande et de chaque zone par rapport à la cible.
+    /// - Parameters:
+    ///   - averageLevels: niveaux moyens (dB) captés par le microphone, une valeur par bande.
+    ///   - referenceLevels: niveaux moyens de ce que la source envoie aux enceintes
+    ///     (même répartition en bandes que `averageLevels`). Si `nil` ou de taille différente,
+    ///     le spectre typique de la musique (`targetSlope`) sert de cible.
+    ///   - settings: réglages dont on tire la plage de fréquences et donc le centre de chaque bande.
+    /// - Returns: le rapport, ou `nil` s'il y a trop peu de bandes pour comparer.
     static func report(
         averageLevels: [Float],
         referenceLevels: [Float]? = nil,
@@ -83,11 +92,13 @@ enum FrequencyResponseAnalysis {
         let logMin = log10(minFreq)
         let logMax = log10(maxFreq)
 
-        // Raw deviation = measured level - target slope (referenced to 1 kHz).
+        // Écart brut = niveau mesuré - cible. Sans référence, la cible est la pente typique
+        // exprimée par rapport à 1 kHz.
         var centers: [Double] = []
         var targets: [Float] = []
         var raw: [Float] = []
         for i in 0..<count {
+            // Centre de la bande sur l'échelle logarithmique (d'où le + 0,5).
             let fraction = (Double(i) + 0.5) / Double(count)
             let center = pow(10, logMin + (logMax - logMin) * fraction)
             let octavesFromReference = Float(log2(center / 1_000))
@@ -97,6 +108,8 @@ enum FrequencyResponseAnalysis {
             raw.append(averageLevels[i] - target)
         }
 
+        // Décalage d'alignement : écart moyen sur les médiums. À défaut de bande dans cette
+        // plage (plage analysée réduite), on se rabat sur toutes les bandes.
         let referenceValues = zip(centers, raw)
             .filter { referenceRange.contains($0.0) }
             .map(\.1)
@@ -107,6 +120,7 @@ enum FrequencyResponseAnalysis {
             BandDeviation(id: $0, centerFrequency: centers[$0], deviation: raw[$0] - offset)
         }
 
+        // Moyenne des écarts par zone ; les zones sans aucune bande sont ignorées.
         let zones: [ZoneDeviation] = zoneDefinitions.compactMap { definition in
             let members = bands.filter { definition.range.contains($0.centerFrequency) }
             guard !members.isEmpty else { return nil }
@@ -115,6 +129,7 @@ enum FrequencyResponseAnalysis {
             return ZoneDeviation(name: definition.name, range: definition.range, deviation: mean, verdict: verdict)
         }
 
+        // Courbe « restituée » : la cible à laquelle on ajoute l'écart aligné.
         let restituted = zip(targets, bands).map { $0 + $1.deviation }
         return FrequencyResponseReport(bands: bands, zones: zones, expected: targets, restituted: restituted)
     }

@@ -6,23 +6,26 @@ import MediaPlayer
 import AVKit
 #endif
 
-/// Owns the file player and the network broadcaster for the "source" iPhone/iPad.
+/// Possède le lecteur de fichier et le diffuseur réseau de l'iPhone/iPad « source ».
 @Observable
 final class PlayerSourceModel {
     private(set) var fileName: String?
     private(set) var isPlaying = false
+    /// Nombre d'appareils de mesure actuellement connectés.
     private(set) var clientCount = 0
     private(set) var errorMessage: String?
-    /// Output the sound is currently sent to, shown to help diagnose silence.
+    /// Sortie vers laquelle le son est envoyé, affichée pour aider à diagnostiquer un silence.
     private(set) var outputName: String?
 
     private let settings = SpectrumSettings()
     private let player = ReferencePlayer()
     private let broadcaster = ReferenceBroadcaster()
     private var isBroadcasting = false
+    /// Fichier dont l'accès sécurisé est ouvert ; à refermer quand on n'en a plus besoin.
     private var accessedURL: URL?
 
     init() {
+        // Les rappels viennent de threads audio ou réseau : on repasse sur le main actor avant de toucher à l'état.
         player.onFrame = { [broadcaster] frame in
             broadcaster.send(frame)
         }
@@ -38,7 +41,7 @@ final class PlayerSourceModel {
         }
     }
 
-    /// Makes the source visible to measuring devices, even before playback starts.
+    /// Rend la source visible des appareils de mesure, même avant le début de la lecture.
     func startBroadcasting() {
         guard !isBroadcasting else { return }
         do {
@@ -58,9 +61,11 @@ final class PlayerSourceModel {
         releaseFile()
     }
 
+    /// Charge un morceau choisi par l'utilisateur.
     func load(_ url: URL) {
         errorMessage = nil
         releaseFile()
+        // Nécessaire pour lire un fichier choisi hors du bac à sable de l'app (sélecteur de fichiers).
         if url.startAccessingSecurityScopedResource() {
             accessedURL = url
         }
@@ -92,7 +97,7 @@ final class PlayerSourceModel {
         }
         Task {
             do {
-                // Activating the audio session can block, so keep it off the main thread.
+                // L'activation de la session audio peut bloquer : on la sort du thread principal.
                 try await Task.detached { [player] in try player.play() }.value
                 isPlaying = true
                 outputName = player.outputName
@@ -102,7 +107,7 @@ final class PlayerSourceModel {
         }
     }
 
-    /// Reports a library item that can't be played (cloud-only or DRM-protected).
+    /// Signale un morceau de la bibliothèque impossible à lire (dans le cloud uniquement ou protégé par DRM).
     func libraryItemUnavailable() {
         errorMessage = "Ce morceau n'est pas utilisable : il doit être téléchargé sur l'appareil et sans protection (DRM). Les titres Apple Music en streaming ne sont pas lisibles."
     }
@@ -117,8 +122,8 @@ final class PlayerSourceModel {
     }
 }
 
-/// Screen for the device that plays the music: it plays a file through its speakers
-/// output and tells the measuring device what it is playing.
+/// Écran de l'appareil qui joue la musique : il lit un fichier vers sa sortie audio
+/// et indique à l'appareil de mesure ce qu'il joue.
 struct PlayerSourceView: View {
     @State private var model = PlayerSourceModel()
     @State private var showingImporter = false
@@ -221,7 +226,7 @@ struct PlayerSourceView: View {
 }
 
 #if os(iOS)
-/// System button that lets the user choose the AirPlay / Bluetooth output device.
+/// Bouton système qui permet de choisir la sortie AirPlay / Bluetooth.
 struct AirPlayRoutePicker: UIViewRepresentable {
     func makeUIView(context: Context) -> AVRoutePickerView {
         let picker = AVRoutePickerView()
@@ -234,8 +239,8 @@ struct AirPlayRoutePicker: UIViewRepresentable {
     func updateUIView(_ uiView: AVRoutePickerView, context: Context) {}
 }
 
-/// Lets the user pick a song from the Music library. Only songs downloaded on the
-/// device and not DRM-protected expose a URL; otherwise the callback receives nil.
+/// Permet de choisir un morceau dans la bibliothèque Musique. Seuls les morceaux téléchargés
+/// sur l'appareil et sans DRM exposent une URL ; sinon le rappel reçoit `nil`.
 struct MusicLibraryPicker: UIViewControllerRepresentable {
     let onPick: (URL?) -> Void
     @Environment(\.dismiss) private var dismiss

@@ -1,20 +1,23 @@
 import Foundation
 import Observation
 
-/// Modifiable parameters that control how the spectrum curve is computed and displayed.
-// Properties are read from the real-time audio tap thread as well as written from the
-// main actor by UI controls. Reads/writes of these scalar values are benignly racy
-// (worst case: one stale frame of analysis), which is standard practice for live audio
-// parameters and avoids locking the audio thread.
+/// Paramètres modifiables qui contrôlent le calcul et l'affichage de la courbe du spectre.
+///
+/// Les propriétés sont lues par le thread temps réel du tap audio et écrites depuis le
+/// main actor par l'interface. Ces accès à des valeurs scalaires sont des courses de
+/// données tolérées : au pire, une image d'analyse est calculée avec l'ancienne valeur.
+/// C'est la pratique courante pour des paramètres audio en direct, et cela évite de poser
+/// un verrou sur le thread audio, qui doit rester non bloquant.
 @Observable
 nonisolated final class SpectrumSettings {
-    /// How the band levels are rendered in `SpectrumView`.
+    /// Façon de dessiner les niveaux des bandes dans `SpectrumView`.
     enum DisplayStyle: String, CaseIterable, Identifiable {
         case bars
         case curve
 
         var id: Self { self }
 
+        /// Libellé affiché dans le sélecteur de style.
         var label: String {
             switch self {
             case .bars: return "Barres"
@@ -23,34 +26,38 @@ nonisolated final class SpectrumSettings {
         }
     }
 
-    /// Lower bound of the analyzed frequency range, in hertz.
+    /// Borne basse de la plage de fréquences analysée, en hertz.
     var minFrequency: Double = 30
-    /// Upper bound of the analyzed frequency range, in hertz.
+    /// Borne haute de la plage de fréquences analysée, en hertz.
     var maxFrequency: Double = 20_000
 
-    /// Visual style used to render the band levels.
+    /// Style visuel utilisé pour afficher les niveaux des bandes.
     var displayStyle: DisplayStyle = .bars
 
-    /// Number of bars drawn across the frequency range (log-spaced).
+    /// Nombre de barres dessinées sur la plage de fréquences (espacées de façon logarithmique,
+    /// comme la perception de l'oreille).
     var numberOfBands: Int = 32
 
-    /// Levels at or below this value are drawn at the bottom of the meter.
-    var minDecibels: Float = -190
-    /// Levels at or above this value are drawn at the top of the meter.
+    /// Les niveaux inférieurs ou égaux à cette valeur sont dessinés en bas du vumètre.
+    var minDecibels: Float = -220
+    /// Les niveaux supérieurs ou égaux à cette valeur sont dessinés en haut du vumètre.
     var maxDecibels: Float = 0
 
-    /// How quickly a bar rises when the level increases (0 = frozen, 1 = instantaneous).
+    /// Vitesse de montée d'une barre quand le niveau augmente (0 = figée, 1 = instantanée).
     var attack: Float = 0.6
-    /// How quickly a bar falls when the level decreases (0 = frozen, 1 = instantaneous).
+    /// Vitesse de descente d'une barre quand le niveau baisse (0 = figée, 1 = instantanée).
+    /// Plus lente que l'attaque par défaut, pour que les pics restent lisibles.
     var release: Float = 0.15
 
-    /// FFT window size. Must be a power of two; larger values give finer frequency resolution
-    /// but slower time response.
+    /// Taille de la fenêtre FFT. Doit être une puissance de deux : une valeur plus grande
+    /// donne une résolution fréquentielle plus fine mais une réponse plus lente dans le temps.
     var fftSize: Int = 4096
 
+    /// Tailles de FFT proposées à l'utilisateur (toutes des puissances de deux).
     static let availableFFTSizes = [1024, 2048, 4096, 8192, 16384]
 
-    /// Plain-value snapshot used by the (non main actor) audio analysis code.
+    /// Copie en valeurs simples, utilisée par le code d'analyse audio (hors main actor).
+    /// Une copie évite de partager l'objet observable avec le thread audio.
     var analysisConfig: SpectrumConfig {
         SpectrumConfig(
             fftSize: fftSize,
@@ -62,6 +69,7 @@ nonisolated final class SpectrumSettings {
         )
     }
 
+    /// Rétablit tous les paramètres à leurs valeurs par défaut.
     func reset() {
         minFrequency = 30
         maxFrequency = 20_000

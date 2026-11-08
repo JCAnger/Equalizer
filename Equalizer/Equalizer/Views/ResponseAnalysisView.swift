@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Shows which frequency zones the speakers (and room) lack or exaggerate, based on the
-/// long-term average of the music captured by the microphone.
+/// Montre quelles zones de fréquences les enceintes (et la pièce) atténuent ou exagèrent,
+/// d'après la moyenne à long terme de la musique captée par le microphone.
 struct ResponseAnalysisView: View {
     let analyzer: AudioSpectrumAnalyzer
     let reference: ReferenceReceiver
@@ -9,13 +9,15 @@ struct ResponseAnalysisView: View {
 
     @Environment(\.dismiss) private var dismiss
 
+    /// Étendue (dB) des graphiques de part et d'autre de la courbe attendue ou de l'axe zéro.
     private let displayRange: Float = 12
 
-    /// The reference is only used when the Mac has sent audio during the measurement.
+    /// La référence n'est utilisée que si la source a envoyé de l'audio pendant la mesure.
     private var usesReference: Bool {
         reference.frameCount > 0
     }
 
+    /// Rapport recalculé à chaque évaluation de la vue : le calcul est léger (quelques dizaines de bandes).
     private var report: FrequencyResponseReport? {
         FrequencyResponseAnalysis.report(
             averageLevels: analyzer.averageBandLevels,
@@ -82,6 +84,7 @@ struct ResponseAnalysisView: View {
         }
     }
 
+    /// État de la connexion à la source et boutons de pilotage de la mesure.
     private var controls: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label(
@@ -102,6 +105,7 @@ struct ResponseAnalysisView: View {
                         analyzer.startMeasurement()
                         reference.startMeasurement()
                     }
+                    // Sans capture du micro, il n'y aurait rien à mesurer.
                     .disabled(!analyzer.isRunning)
                 }
                 Spacer()
@@ -125,6 +129,7 @@ struct ResponseAnalysisView: View {
         }
     }
 
+    /// Résumé de l'avancée de la mesure (nombre d'analyses du micro et de la référence).
     private var status: String {
         let count = analyzer.measuredFrameCount
         if analyzer.isMeasuring && count == 0 {
@@ -134,6 +139,7 @@ struct ResponseAnalysisView: View {
         return "\(state) · \(count) analyses micro · \(reference.frameCount) analyses référence"
     }
 
+    /// Couleur associée à un verdict : rouge pour un manque, orange pour un excès, vert si équilibré.
     private func color(for verdict: ResponseVerdict) -> Color {
         switch verdict {
         case .lacking: return .red
@@ -152,10 +158,11 @@ struct ResponseAnalysisView: View {
         .font(.caption)
     }
 
+    /// Fréquences (Hz) repérées sous les courbes.
     private let frequencyLabels: [Double] = [100, 1_000, 10_000]
 
-    /// Both curves on a log-frequency axis. The bands are log-spaced, so the band index
-    /// maps linearly onto the horizontal axis.
+    /// Les deux courbes sur un axe de fréquences logarithmique. Les bandes étant espacées de
+    /// façon logarithmique, l'indice de bande correspond linéairement à l'axe horizontal.
     private func curvesChart(expected: [Float], restituted: [Float]) -> some View {
         Canvas { context, size in
             guard expected.count > 1, expected.count == restituted.count else { return }
@@ -163,10 +170,10 @@ struct ResponseAnalysisView: View {
             let axisHeight: CGFloat = 16
             let plotHeight = size.height - axisHeight
 
-            // The vertical scale follows the expected curve only, so it doesn't rescale
-            // (and make the dotted curve appear to move) when the measured curve varies.
-            // The measured curve is aligned on the expected one in the mids, so a margin
-            // of `displayRange` around the expected curve is enough to show the deviations.
+            // L'échelle verticale ne suit que la courbe attendue : elle ne change pas d'échelle
+            // (et la courbe en pointillés ne semble pas bouger) quand la courbe mesurée varie.
+            // La courbe mesurée est alignée sur l'attendue dans les médiums, donc une marge de
+            // `displayRange` autour de l'attendue suffit pour montrer les écarts.
             let low = (expected.min() ?? 0) - displayRange
             let high = (expected.max() ?? 0) + displayRange
 
@@ -186,7 +193,7 @@ struct ResponseAnalysisView: View {
                 return path
             }
 
-            // Frequency labels with faint vertical guides.
+            // Repères de fréquence avec de discrets guides verticaux.
             let minFreq = max(settings.minFrequency, 1)
             let maxFreq = max(settings.maxFrequency, minFreq + 1)
             for frequency in frequencyLabels where frequency > minFreq && frequency < maxFreq {
@@ -216,7 +223,8 @@ struct ResponseAnalysisView: View {
         }
     }
 
-    /// Bars going up (excess) or down (lack) from a center line at 0 dB.
+    /// Barres montant (excès) ou descendant (manque) à partir d'une ligne centrale à 0 dB.
+    /// Les écarts au-delà de `displayRange` sont tronqués pour rester dans le cadre.
     private func deviationChart(_ bands: [BandDeviation]) -> some View {
         Canvas { context, size in
             let midY = size.height / 2

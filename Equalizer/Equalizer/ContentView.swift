@@ -1,7 +1,10 @@
 import SwiftUI
 
+/// Écran de mesure : affiche le spectre capté par le microphone, avec la référence de la
+/// source en superposition, et donne accès aux réglages et à l'analyse des enceintes.
 struct ContentView: View {
     @State private var settings = SpectrumSettings()
+    // Créés dans `onAppear` : ils dépendent de `settings`, qui n'existe pas encore à l'initialisation des propriétés.
     @State private var analyzer: AudioSpectrumAnalyzer?
     @State private var reference: ReferenceReceiver?
     @State private var showingSettings = false
@@ -63,6 +66,7 @@ struct ContentView: View {
                 }
             }
             .onAppear {
+                // Ne crée l'analyseur qu'une fois : `onAppear` peut être rappelé (retour d'une feuille, etc.).
                 if analyzer == nil {
                     analyzer = AudioSpectrumAnalyzer(settings: settings)
                     reference = ReferenceReceiver(settings: settings)
@@ -75,6 +79,7 @@ struct ContentView: View {
             }
     }
 
+    /// Démarre ou arrête la capture du microphone selon l'état courant.
     private func toggleCapture() {
         guard let analyzer else { return }
         if analyzer.isRunning {

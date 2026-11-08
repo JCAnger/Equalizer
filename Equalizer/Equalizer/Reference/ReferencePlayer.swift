@@ -1,14 +1,14 @@
 import AVFoundation
 import Foundation
 
-/// Plays an audio file (looping) and turns exactly what is sent to the speakers into
-/// band levels, using the same calculator as the microphone analysis.
+/// Lit un fichier audio (en boucle) et convertit exactement ce qui est envoyé aux enceintes
+/// en niveaux de bandes, avec le même calculateur que l'analyse du microphone.
 ///
-/// The levels are taken from the main mixer output, so volume changes made on the
-/// device itself don't matter: only the shape of the spectrum is compared.
+/// Les niveaux sont pris à la sortie du mélangeur principal : les changements de volume faits
+/// sur l'appareil lui-même n'ont donc pas d'importance, seule la forme du spectre est comparée.
 ///
-/// Audio callbacks arrive on audio threads, so this type is deliberately not
-/// main-actor isolated.
+/// Les rappels audio arrivent sur des threads audio : ce type n'est donc volontairement
+/// pas isolé au main actor.
 nonisolated final class ReferencePlayer: @unchecked Sendable {
     enum PlayerError: LocalizedError {
         case noFile
@@ -22,31 +22,34 @@ nonisolated final class ReferencePlayer: @unchecked Sendable {
     private let node = AVAudioPlayerNode()
     private var noiseNode: AVAudioSourceNode?
     private let calculator = SpectrumBandCalculator()
+    /// Protège `isActive` et `wantsPlayback`, lus depuis des threads audio.
     private let lock = NSLock()
 
     private var file: AVAudioFile?
     private var noiseColor: NoiseColor?
+    /// Faux tant que le graphe audio n'a pas été (re)construit après un chargement.
     private var isGraphReady = false
     private var isScheduled = false
     private var wantsPlayback = false
-    /// True between `play()` and `pause()`/`stop()`; guarded by `lock`.
+    /// Vrai entre `play()` et `pause()`/`stop()` ; protégé par `lock`.
     private var isActive = false
 
-    // Used from the audio tap thread only while the engine runs.
+    // Utilisé depuis le thread du tap audio, uniquement pendant que le moteur tourne.
     private var config = SpectrumConfig(
         fftSize: 4096, numberOfBands: 32, minFrequency: 30, maxFrequency: 20_000,
         minDecibels: -190, maxDecibels: 0
     )
+    /// Échantillons mono en attente : un buffer de tap n'a pas forcément la taille de la FFT.
     private var pending: [Float] = []
 
-    /// Called on an audio thread with each new block of band levels.
+    /// Appelé sur un thread audio à chaque nouveau bloc de niveaux de bandes.
     var onFrame: (@Sendable (ReferenceFrame) -> Void)?
 
     private var observers: [NSObjectProtocol] = []
 
     init() {
-        // The engine stops by itself when the output route changes (AirPlay, Bluetooth,
-        // headphones) or after an interruption; restart it so playback doesn't go silent.
+        // Le moteur s'arrête de lui-même quand la sortie change (AirPlay, Bluetooth, casque)
+        // ou après une interruption ; on le relance pour que la lecture ne devienne pas muette.
         let center = NotificationCenter.default
         observers.append(center.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil) { [weak self] _ in
             self?.restartIfNeeded()
@@ -54,6 +57,7 @@ nonisolated final class ReferencePlayer: @unchecked Sendable {
         #if os(iOS)
         observers.append(center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: nil) { [weak self] notification in
             let rawType = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+            // On ne relance qu'à la fin de l'interruption (appel, alarme…), pas à son début.
             if rawType == AVAudioSession.InterruptionType.ended.rawValue {
                 self?.restartIfNeeded()
             }
@@ -66,7 +70,8 @@ nonisolated final class ReferencePlayer: @unchecked Sendable {
         stop()
     }
 
-    /// Name of the current output (e.g. "Haut-parleur"), to show where the sound goes.
+    /// Description de la sortie actuelle (ex. « Haut-parleur · volume média 50 % … »),
+    /// affichée pour aider à comprendre où part le son. `nil` sur Mac.
     var outputName: String? {
         #if os(iOS)
         let session = AVAudioSession.sharedInstance()
@@ -80,6 +85,7 @@ nonisolated final class ReferencePlayer: @unchecked Sendable {
         #endif
     }
 
+    /// Relance le moteur arrêté par le système, si l'utilisateur voulait toujours écouter.
     private func restartIfNeeded() {
         lock.lock()
         let shouldRun = isActive
@@ -89,9 +95,12 @@ nonisolated final class ReferencePlayer: @unchecked Sendable {
         try? AVAudioSession.sharedInstance().setActive(true)
         #endif
         guard (try? engine.start()) != nil else { return }
+        // Le bruit généré est joué par son propre nœud source : seul le lecteur de fichier a besoin de `play()`.
         if noiseColor == nil { node.play() }
     }
 
+    /// Charge un fichier audio. Le graphe est reconstruit au prochain `play()`.
+    /// - Throws: l'erreur d'`AVAudioFile` si le fichier est illisible.
     func load(_ url: URL, config: SpectrumConfig) throws {
         stop()
         file = try AVAudioFile(forReading: url)
@@ -100,7 +109,8 @@ nonisolated final class ReferencePlayer: @unchecked Sendable {
         isGraphReady = false
     }
 
-    /// Uses a generated pink noise (equal energy per octave) instead of a file.
+    /// Utilise un bruit généré (rose ou blanc) à la place d'un fichier.
+    /// Le bruit rose a une énergie égale par octave : c'est un signal de test classique.
     func loadNoise(_ color: NoiseColor, config: SpectrumConfig) {
         stop()
         file = nil
@@ -109,6 +119,8 @@ nonisolated final class ReferencePlayer: @unchecked Sendable {
         isGraphReady = false
     }
 
+    /// Démarre (ou reprend) la lecture.
+    /// - Throws: `PlayerError.noFile` si rien n'est chargé, ou l'erreur de la session / du moteur.
     func play() throws {
         guard noiseColor != nil || file != nil else { throw PlayerError.noFile }
 
@@ -129,6 +141,7 @@ nonisolated final class ReferencePlayer: @unchecked Sendable {
         isActive = true
         lock.unlock()
 
+        // Le bruit est produit en continu par le moteur : pas de fichier à planifier.
         guard noiseColor == nil else { return }
         setWantsPlayback(true)
         if !isScheduled {
@@ -143,6 +156,7 @@ nonisolated final class ReferencePlayer: @unchecked Sendable {
         isActive = false
         lock.unlock()
         if noiseColor != nil {
+            // Le générateur de bruit n'a pas de nœud lecteur à mettre en pause : on suspend tout le moteur.
             engine.pause()
         } else {
             node.pause()
@@ -153,6 +167,7 @@ nonisolated final class ReferencePlayer: @unchecked Sendable {
         lock.lock()
         isActive = false
         lock.unlock()
+        // Empêche la fin du fichier en cours de relancer une boucle après l'arrêt.
         setWantsPlayback(false)
         if node.engine != nil {
             node.stop()
@@ -162,11 +177,13 @@ nonisolated final class ReferencePlayer: @unchecked Sendable {
         pending.removeAll()
     }
 
-    // MARK: - Private
+    // MARK: - Privé
 
+    /// Reconstruit le graphe audio (source -> mélangeur principal) et installe le tap d'analyse.
     private func buildGraph() throws {
         engine.stop()
         engine.mainMixerNode.removeTap(onBus: 0)
+        // On détache les anciens nœuds : le type de source a pu changer (fichier <-> bruit).
         if node.engine != nil {
             engine.detach(node)
         }
@@ -180,6 +197,7 @@ nonisolated final class ReferencePlayer: @unchecked Sendable {
                 throw PlayerError.noFile
             }
             let generator = NoiseGenerator(color: color)
+            // Ce bloc est appelé sur le thread de rendu : il ne doit ni allouer ni bloquer.
             let source = AVAudioSourceNode(format: format) { _, _, frameCount, audioBufferList in
                 let buffers = UnsafeMutableAudioBufferListPointer(audioBufferList)
                 for buffer in buffers {
@@ -207,10 +225,11 @@ nonisolated final class ReferencePlayer: @unchecked Sendable {
         isGraphReady = true
     }
 
-    /// Plays the file and, when it ends, starts it again until playback is stopped.
+    /// Joue le fichier et, à sa fin, le relance tant que la lecture n'est pas arrêtée.
     private func scheduleFile() {
         guard let file else { return }
         file.framePosition = 0
+        // `.dataPlayedBack` : le rappel n'a lieu qu'une fois le son réellement joué, pas seulement lu.
         node.scheduleFile(file, at: nil, completionCallbackType: .dataPlayedBack) { [weak self] _ in
             guard let self, self.currentWantsPlayback() else { return }
             self.scheduleFile()
@@ -229,14 +248,14 @@ nonisolated final class ReferencePlayer: @unchecked Sendable {
         return wantsPlayback
     }
 
-    // Runs on the audio engine's tap thread.
+    /// Mixe en mono et calcule une image par `fftSize` échantillons. S'exécute sur le thread du tap audio.
     private func process(_ buffer: AVAudioPCMBuffer, sampleRate: Float) {
         guard let channelData = buffer.floatChannelData else { return }
         let frames = Int(buffer.frameLength)
         let channels = Int(buffer.format.channelCount)
         guard frames > 0, channels > 0 else { return }
 
-        // Mix down to mono.
+        // Mixage en mono : moyenne des canaux.
         for frame in 0..<frames {
             var sum: Float = 0
             for channel in 0..<channels {
@@ -245,6 +264,7 @@ nonisolated final class ReferencePlayer: @unchecked Sendable {
             pending.append(sum / Float(channels))
         }
 
+        // Mêmes blocs sans recouvrement que les autres sources, pour des mesures comparables.
         while pending.count >= config.fftSize {
             let bands = pending.withUnsafeBufferPointer { pointer in
                 calculator.bands(samples: pointer.baseAddress!, count: config.fftSize, sampleRate: sampleRate, config: config)
@@ -257,16 +277,17 @@ nonisolated final class ReferencePlayer: @unchecked Sendable {
     }
 }
 
-/// Generated test signals: pink noise has equal energy per octave, white noise per hertz.
+/// Signaux de test générés : le bruit rose a une énergie égale par octave, le bruit blanc par hertz.
 nonisolated enum NoiseColor {
     case pink
     case white
 }
 
-/// White noise, optionally filtered to pink (-3 dB/octave) with Paul Kellet's filter.
-/// Used from a single audio render thread.
+/// Bruit blanc, éventuellement filtré en bruit rose (-3 dB/octave) avec le filtre de Paul Kellet.
+/// Utilisé depuis un seul thread de rendu audio, d'où l'absence de verrou sur l'état du filtre.
 private nonisolated final class NoiseGenerator {
     private let color: NoiseColor
+    /// État du filtre rose (trois filtres passe-bas du premier ordre en parallèle).
     private var b0: Float = 0
     private var b1: Float = 0
     private var b2: Float = 0
@@ -275,9 +296,12 @@ private nonisolated final class NoiseGenerator {
         self.color = color
     }
 
+    /// Produit l'échantillon suivant.
     func next() -> Float {
         let white = Float.random(in: -1...1)
+        // Le facteur 0,3 ramène le bruit blanc à un niveau d'écoute raisonnable.
         if color == .white { return white * 0.3 }
+        // Coefficients du filtre de Paul Kellet : ils approchent une pente de -3 dB/octave.
         b0 = 0.99765 * b0 + white * 0.0990460
         b1 = 0.96300 * b1 + white * 0.2965164
         b2 = 0.57000 * b2 + white * 1.0526913

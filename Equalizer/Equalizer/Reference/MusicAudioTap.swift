@@ -3,10 +3,10 @@ import AppKit
 import CoreAudio
 import Foundation
 
-/// Captures the audio output of the Music app with a Core Audio process tap and turns it
-/// into band levels, using the same calculator as the microphone analysis.
+/// Capture la sortie audio de l'app Music avec un tap de processus Core Audio et la convertit
+/// en niveaux de bandes, avec le même calculateur que l'analyse du microphone.
 ///
-/// The tap is unmuted, so Music keeps playing normally (to the AirPlay speakers).
+/// Le tap n'est pas muet : Music continue de jouer normalement (vers les enceintes AirPlay).
 nonisolated final class MusicAudioTap: @unchecked Sendable {
     enum TapError: LocalizedError {
         case musicNotRunning
@@ -30,11 +30,13 @@ nonisolated final class MusicAudioTap: @unchecked Sendable {
     private let queue = DispatchQueue(label: "MusicAudioTap", qos: .userInitiated)
     private let calculator = SpectrumBandCalculator()
 
+    /// Identifiants Core Audio des objets créés ; `kAudioObjectUnknown` signifie « rien à détruire ».
     private var tapID = AudioObjectID(kAudioObjectUnknown)
     private var aggregateID = AudioObjectID(kAudioObjectUnknown)
     private var ioProcID: AudioDeviceIOProcID?
 
-    // Touched only from `queue` once running.
+    // Touché uniquement depuis `queue` une fois la capture lancée. Les valeurs initiales
+    // sont remplacées dans `start(config:)` et `startIO()`.
     private var config = SpectrumConfig(
         fftSize: 4096, numberOfBands: 32, minFrequency: 30, maxFrequency: 20_000,
         minDecibels: -190, maxDecibels: 0
@@ -42,15 +44,18 @@ nonisolated final class MusicAudioTap: @unchecked Sendable {
     private var sampleRate: Float = 48_000
     private var channelCount = 2
     private var isInterleaved = true
+    /// Échantillons mono en attente : un bloc de capture n'a pas forcément la taille de la FFT.
     private var pending: [Float] = []
 
-    /// Called on a private queue with each new block of band levels.
+    /// Appelé sur une file privée à chaque nouveau bloc de niveaux de bandes.
     var onFrame: (@Sendable (ReferenceFrame) -> Void)?
 
     deinit {
         stop()
     }
 
+    /// Démarre la capture. Relance proprement si elle était déjà active.
+    /// - Throws: `TapError` si Music est introuvable ou si Core Audio refuse une étape.
     func start(config: SpectrumConfig) throws {
         stop()
         self.config = config
@@ -62,11 +67,13 @@ nonisolated final class MusicAudioTap: @unchecked Sendable {
             try createAggregateDevice()
             try startIO()
         } catch {
+            // Libère ce qui a déjà été créé pour ne laisser aucun appareil fantôme dans le système.
             stop()
             throw error
         }
     }
 
+    /// Détruit les ressources dans l'ordre inverse de leur création.
     func stop() {
         if let ioProcID, aggregateID != kAudioObjectUnknown {
             AudioDeviceStop(aggregateID, ioProcID)
@@ -83,15 +90,18 @@ nonisolated final class MusicAudioTap: @unchecked Sendable {
         }
     }
 
-    // MARK: - Setup
+    // MARK: - Mise en place
 
+    /// Identifiant du tap, repris dans l'appareil agrégé pour l'y rattacher.
     private var tapUUID = UUID()
 
+    /// Crée le tap sur le processus de Music.
     private func createTap() throws {
         guard let music = NSRunningApplication.runningApplications(withBundleIdentifier: Self.musicBundleID).first else {
             throw TapError.musicNotRunning
         }
 
+        // Core Audio désigne les processus par un objet audio, à ne pas confondre avec le PID.
         var pid = music.processIdentifier
         var processObject = AudioObjectID(kAudioObjectUnknown)
         var address = Self.address(kAudioHardwarePropertyTranslatePIDToProcessObject)
@@ -100,21 +110,24 @@ nonisolated final class MusicAudioTap: @unchecked Sendable {
             AudioObjectID(kAudioObjectSystemObject), &address,
             UInt32(MemoryLayout<pid_t>.size), &pid, &size, &processObject
         )
-        // Music has no audio process object until it has produced sound at least once.
+        // Music n'a pas d'objet audio tant qu'il n'a pas produit de son au moins une fois.
         guard status == noErr, processObject != kAudioObjectUnknown else {
             throw TapError.musicNotRunning
         }
 
         tapUUID = UUID()
-        // The default mute behavior leaves Music audible, which is what we want.
+        // Le comportement de sourdine par défaut laisse Music audible, ce qui est voulu.
         let description = CATapDescription(stereoMixdownOfProcesses: [processObject])
         description.uuid = tapUUID
+        // Privé : le tap n'est pas visible des autres apps.
         description.isPrivate = true
 
         status = AudioHardwareCreateProcessTap(description, &tapID)
         guard status == noErr else { throw TapError.coreAudio("création du tap", status) }
     }
 
+    /// Crée un appareil agrégé qui regroupe le tap et la sortie par défaut. Core Audio
+    /// ne permet de lire un tap qu'à travers un appareil, d'où cet intermédiaire.
     private func createAggregateDevice() throws {
         let outputUID = try Self.defaultOutputDeviceUID()
         let description: [String: Any] = [
@@ -126,6 +139,7 @@ nonisolated final class MusicAudioTap: @unchecked Sendable {
             kAudioAggregateDeviceTapAutoStartKey: true,
             kAudioAggregateDeviceSubDeviceListKey: [[kAudioSubDeviceUIDKey: outputUID]],
             kAudioAggregateDeviceTapListKey: [[
+                // Compense la dérive d'horloge entre le tap et le périphérique de sortie.
                 kAudioSubTapDriftCompensationKey: true,
                 kAudioSubTapUIDKey: tapUUID.uuidString
             ]]
@@ -134,12 +148,14 @@ nonisolated final class MusicAudioTap: @unchecked Sendable {
         guard status == noErr else { throw TapError.coreAudio("création de l'appareil agrégé", status) }
     }
 
+    /// Lit le format du tap, puis installe le callback audio et démarre le flux.
     private func startIO() throws {
         var format = AudioStreamBasicDescription()
         var address = Self.address(kAudioTapPropertyFormat)
         var size = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
         var status = AudioObjectGetPropertyData(tapID, &address, 0, nil, &size, &format)
         guard status == noErr else { throw TapError.coreAudio("lecture du format", status) }
+        // `handle(_:)` lit des Float 32 bits : tout autre format serait mal interprété.
         guard format.mFormatID == kAudioFormatLinearPCM,
               format.mFormatFlags & kAudioFormatFlagIsFloat != 0,
               format.mBitsPerChannel == 32 else {
@@ -158,14 +174,16 @@ nonisolated final class MusicAudioTap: @unchecked Sendable {
         guard status == noErr else { throw TapError.coreAudio("démarrage", status) }
     }
 
-    // MARK: - Processing (on `queue`)
+    // MARK: - Traitement (sur `queue`)
 
+    /// Réduit chaque bloc reçu en mono, l'accumule, puis calcule une image par `fftSize` échantillons.
     private func handle(_ inputData: UnsafePointer<AudioBufferList>) {
         let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inputData))
         guard let first = buffers.first, let firstData = first.mData else { return }
 
-        // Mix down to mono.
+        // Mixage en mono : moyenne des canaux. Le format détermine la disposition mémoire.
         if isInterleaved {
+            // Canaux entrelacés dans un seul buffer : L R L R…
             let channels = max(Int(first.mNumberChannels), 1)
             let frames = Int(first.mDataByteSize) / (MemoryLayout<Float>.size * channels)
             let samples = firstData.assumingMemoryBound(to: Float.self)
@@ -177,6 +195,7 @@ nonisolated final class MusicAudioTap: @unchecked Sendable {
                 pending.append(sum / Float(channels))
             }
         } else {
+            // Un buffer par canal : on les additionne échantillon par échantillon.
             let frames = Int(first.mDataByteSize) / MemoryLayout<Float>.size
             var mono = [Float](repeating: 0, count: frames)
             var usedChannels: Float = 0
@@ -194,7 +213,8 @@ nonisolated final class MusicAudioTap: @unchecked Sendable {
             }
         }
 
-        // Same non-overlapping blocks as the microphone tap (one FFT per `fftSize` samples).
+        // Mêmes blocs sans recouvrement que le tap du microphone (une FFT par `fftSize`
+        // échantillons), pour que les deux mesures restent comparables.
         while pending.count >= config.fftSize {
             let bands = pending.withUnsafeBufferPointer { pointer in
                 calculator.bands(samples: pointer.baseAddress!, count: config.fftSize, sampleRate: sampleRate, config: config)
@@ -206,8 +226,9 @@ nonisolated final class MusicAudioTap: @unchecked Sendable {
         }
     }
 
-    // MARK: - Core Audio helpers
+    // MARK: - Utilitaires Core Audio
 
+    /// Adresse de propriété globale pour un sélecteur donné (cas le plus courant).
     private static func address(_ selector: AudioObjectPropertySelector) -> AudioObjectPropertyAddress {
         AudioObjectPropertyAddress(
             mSelector: selector,
@@ -216,6 +237,7 @@ nonisolated final class MusicAudioTap: @unchecked Sendable {
         )
     }
 
+    /// Renvoie l'UID de la sortie audio par défaut, requis pour décrire l'appareil agrégé.
     private static func defaultOutputDeviceUID() throws -> String {
         var deviceID = AudioDeviceID(kAudioObjectUnknown)
         var address = address(kAudioHardwarePropertyDefaultSystemOutputDevice)
@@ -228,6 +250,7 @@ nonisolated final class MusicAudioTap: @unchecked Sendable {
         size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
         status = AudioObjectGetPropertyData(deviceID, &uidAddress, 0, nil, &size, &uid)
         guard status == noErr, let uid else { throw TapError.coreAudio("UID de la sortie", status) }
+        // Core Audio rend la chaîne avec un compteur +1 : `takeRetainedValue` évite une fuite.
         return uid.takeRetainedValue() as String
     }
 }

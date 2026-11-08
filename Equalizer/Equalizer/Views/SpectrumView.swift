@@ -1,14 +1,17 @@
 import SwiftUI
 
-/// Draws the band levels either as a bar-style vu-mètre or as a smooth curve,
-/// on a logarithmic frequency axis spanning `settings.minFrequency` to `settings.maxFrequency`.
+/// Dessine les niveaux des bandes sous forme de vumètre à barres ou de courbe lissée,
+/// sur un axe de fréquences logarithmique allant de `settings.minFrequency` à `settings.maxFrequency`.
 struct SpectrumView: View {
+    /// Niveaux (dB) du microphone, une valeur par bande.
     let levels: [Float]
-    /// Live levels of the music source, drawn as a dashed line over the microphone levels.
+    /// Niveaux en direct de la source musicale, dessinés en pointillés par-dessus ceux du microphone.
     var referenceLevels: [Float] = []
     let settings: SpectrumSettings
 
+    /// Fréquences (Hz) repérées sous le graphique.
     private let axisLabels: [Double] = [30, 100, 200, 1_000,2000, 10_000, 20_000]
+    /// Positions des lignes de la grille et des repères en dB, de 1 (haut) à 0 (bas).
     private let gridFractions: [Double] = [1, 0.75, 0.5, 0.25, 0]
     private let decibelAxisWidth: CGFloat = 34
 
@@ -24,6 +27,7 @@ struct SpectrumView: View {
                 .frame(width: decibelAxisWidth)
 
                 Canvas { context, size in
+                    // Ordre de dessin : grille au fond, niveaux, puis référence par-dessus.
                     drawGrid(context: context, size: size)
                     switch settings.displayStyle {
                     case .bars:
@@ -52,6 +56,7 @@ struct SpectrumView: View {
         .background { AppBackground() }
     }
 
+    /// Repères en dB à gauche du graphique, alignés sur les lignes de la grille.
     private var decibelAxis: some View {
         GeometryReader { geo in
             ZStack(alignment: .topTrailing) {
@@ -66,11 +71,13 @@ struct SpectrumView: View {
         }
     }
 
+    /// Position verticale d'un repère, bornée à 6 pt des bords pour que le texte ne soit pas rogné.
     private func yPosition(for fraction: Double, height: CGFloat) -> CGFloat {
         let clamped = min(max(height * (1 - fraction), 6), height - 6)
         return clamped
     }
 
+    /// Repères de fréquence sous le graphique, placés sur l'échelle logarithmique.
     private var frequencyAxis: some View {
         GeometryReader { geo in
             ZStack(alignment: .topLeading) {
@@ -90,6 +97,7 @@ struct SpectrumView: View {
         freq >= 1000 ? "\(Int(freq / 1000))k" : "\(Int(freq))"
     }
 
+    /// Position horizontale d'une fréquence : proportionnelle à son logarithme, comme les bandes.
     private func xPosition(for freq: Double, width: CGFloat) -> CGFloat {
         let minFreq = max(settings.minFrequency, 1)
         let maxFreq = max(settings.maxFrequency, minFreq + 1)
@@ -100,6 +108,7 @@ struct SpectrumView: View {
         return CGFloat(fraction) * width
     }
 
+    /// Lignes horizontales discrètes, une par repère de l'axe des dB.
     private func drawGrid(context: GraphicsContext, size: CGSize) {
         var path = Path()
         for fraction in stride(from: 0.0, through: 1.0, by: 0.25) {
@@ -110,6 +119,7 @@ struct SpectrumView: View {
         context.stroke(path, with: .color(.white.opacity(0.08)), lineWidth: 1)
     }
 
+    /// Dessine une barre par bande, dont la hauteur reflète le niveau entre `minDecibels` et `maxDecibels`.
     private func drawBars(context: GraphicsContext, size: CGSize) {
         guard !levels.isEmpty else { return }
         let minDB = settings.minDecibels
@@ -118,21 +128,26 @@ struct SpectrumView: View {
         let spacing: CGFloat = 2
         let barWidth = max((size.width - spacing * CGFloat(levels.count - 1)) / CGFloat(levels.count), 1)
 
+        // Un seul dégradé partagé par toutes les barres, ancré sur toute la hauteur de la vue :
+        // menthe en bas (faible) vers bleu ciel en haut (fort), si bien que la couleur d'une
+        // barre révèle son niveau, comme sur un vumètre classique.
+        let barGradient = GraphicsContext.Shading.linearGradient(
+            Gradient(colors: [AppTheme.mint, AppTheme.sky]),
+            startPoint: CGPoint(x: 0, y: size.height),
+            endPoint: CGPoint(x: 0, y: 0)
+        )
+
         for (index, level) in levels.enumerated() {
             let normalized = min(max((level - minDB) / range, 0), 1)
             let barHeight = CGFloat(normalized) * size.height
             let x = CGFloat(index) * (barWidth + spacing)
             let rect = CGRect(x: x, y: size.height - barHeight, width: barWidth, height: barHeight)
-
-            // Pastel mint (quiet) to sky blue (loud).
-            let hue = 0.42 + 0.18 * Double(normalized)
-            let color = Color(hue: hue, saturation: 0.45, brightness: 0.97)
-            context.fill(Path(rect), with: .color(color))
+            context.fill(Path(rect), with: barGradient)
         }
     }
 
-    /// Draws the band levels as a single smooth curve (Catmull-Rom spline) with a
-    /// soft gradient fill underneath, giving a classic graphic-equalizer look.
+    /// Dessine les niveaux des bandes en une seule courbe lissée (spline de Catmull-Rom)
+    /// avec un remplissage en dégradé doux dessous, pour un aspect d'égaliseur graphique classique.
     private func drawCurve(context: GraphicsContext, size: CGSize) {
         guard !levels.isEmpty else { return }
         let minDB = settings.minDecibels
@@ -150,6 +165,7 @@ struct SpectrumView: View {
 
         let line = smoothPath(through: points)
 
+        // Zone de remplissage : la courbe refermée par le bas du graphique.
         var fillArea = line
         fillArea.addLine(to: CGPoint(x: points[points.count - 1].x, y: size.height))
         fillArea.addLine(to: CGPoint(x: points[0].x, y: size.height))
@@ -185,9 +201,9 @@ struct SpectrumView: View {
         )
     }
 
-    /// Draws what the source is playing as a dashed line. The source level and the microphone
-    /// level are not comparable in absolute terms, so the reference is shifted to match the
-    /// microphone on the mid range (250 Hz–2 kHz), like in the analysis.
+    /// Dessine ce que joue la source sous forme de ligne en pointillés. Les niveaux de la source
+    /// et du microphone ne sont pas comparables en valeur absolue : la référence est donc décalée
+    /// pour coïncider avec le microphone sur les médiums (250 Hz–2 kHz), comme dans l'analyse.
     private func drawReference(context: GraphicsContext, size: CGSize) {
         let count = referenceLevels.count
         guard count > 1, levels.count == count else { return }
@@ -197,6 +213,7 @@ struct SpectrumView: View {
         let logMin = log10(minFreq)
         let logMax = log10(maxFreq)
 
+        // Bandes dont le centre tombe dans les médiums ; à défaut (plage réduite), toutes les bandes.
         var midIndices = (0..<count).filter { index in
             let fraction = (Double(index) + 0.5) / Double(count)
             let frequency = pow(10, logMin + (logMax - logMin) * fraction)
@@ -215,7 +232,7 @@ struct SpectrumView: View {
         var path = Path()
         for (index, level) in referenceLevels.enumerated() {
             let normalized = min(max((level + offset - minDB) / range, 0), 1)
-            // Same horizontal placement as the bars (centered) so both views line up.
+            // Même placement horizontal que les barres (centré) pour que les deux vues soient alignées.
             let barSpacing: CGFloat = 2
             let barWidth = max((size.width - barSpacing * CGFloat(count - 1)) / CGFloat(count), 1)
             let x = settings.displayStyle == .bars
@@ -235,7 +252,8 @@ struct SpectrumView: View {
         )
     }
 
-    /// Builds a smooth path through the given points using a Catmull-Rom spline.
+    /// Construit un tracé lisse passant par les points donnés, avec une spline de Catmull-Rom
+    /// convertie en courbes de Bézier cubiques (points de contrôle à 1/6 des tangentes).
     private func smoothPath(through points: [CGPoint]) -> Path {
         var path = Path()
         guard let first = points.first else { return path }
@@ -243,6 +261,7 @@ struct SpectrumView: View {
         guard points.count > 1 else { return path }
 
         for i in 0..<(points.count - 1) {
+            // Aux extrémités, le point voisin manquant est remplacé par le point lui-même.
             let p0 = points[max(i - 1, 0)]
             let p1 = points[i]
             let p2 = points[i + 1]

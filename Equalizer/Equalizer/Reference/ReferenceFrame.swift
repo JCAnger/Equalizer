@@ -1,30 +1,35 @@
 import Foundation
 
-/// One block of band levels describing what the source device is sending to the speakers.
+/// Un bloc de niveaux de bandes décrivant ce que l'appareil source envoie aux enceintes.
 ///
-/// Frames travel from the source (Mac) to the measuring device (iPhone) as
-/// newline-delimited JSON over a TCP connection discovered with Bonjour.
+/// Les images voyagent de la source (Mac) vers l'appareil de mesure (iPhone) sous forme de
+/// JSON délimité par des sauts de ligne, sur une connexion TCP découverte avec Bonjour.
 nonisolated struct ReferenceFrame: Codable, Sendable {
-    /// Band levels in dB, log-spaced between `minFrequency` and `maxFrequency`.
+    /// Niveaux de bandes en dB, espacés de façon logarithmique entre `minFrequency` et `maxFrequency`.
     var bands: [Float]
     var minFrequency: Double
     var maxFrequency: Double
 
-    /// Re-maps the bands onto another log-frequency layout by linear interpolation,
-    /// so the source and the measuring device don't need identical settings.
+    /// Reporte les bandes sur une autre répartition logarithmique des fréquences, par
+    /// interpolation linéaire, pour que la source et l'appareil de mesure n'aient pas besoin
+    /// de réglages identiques.
+    /// - Returns: `bandCount` niveaux ; `-∞` partout si la source a moins de deux bandes.
     func resampled(bandCount: Int, minFrequency targetMin: Double, maxFrequency targetMax: Double) -> [Float] {
         guard bands.count > 1, bandCount > 0 else { return [Float](repeating: -.infinity, count: max(bandCount, 0)) }
 
+        // Les logarithmes exigent des fréquences strictement positives et des bornes distinctes.
         let sourceLogMin = log10(max(minFrequency, 1))
         let sourceLogMax = log10(max(maxFrequency, minFrequency + 1))
         let targetLogMin = log10(max(targetMin, 1))
         let targetLogMax = log10(max(targetMax, targetMin + 1))
 
         return (0..<bandCount).map { index in
+            // Centre de la bande cible, converti en position relative dans la plage de la source.
             let fraction = (Double(index) + 0.5) / Double(bandCount)
             let logFrequency = targetLogMin + (targetLogMax - targetLogMin) * fraction
             let sourceFraction = (logFrequency - sourceLogMin) / (sourceLogMax - sourceLogMin)
-            // Band i of the source is centered on (i + 0.5) / count.
+            // La bande i de la source est centrée sur (i + 0,5) / count. Le résultat est borné
+            // pour ne pas extrapoler hors de la plage de la source.
             let position = min(max(sourceFraction * Double(bands.count) - 0.5, 0), Double(bands.count - 1))
             let lower = Int(position.rounded(.down))
             let upper = min(lower + 1, bands.count - 1)
@@ -35,6 +40,6 @@ nonisolated struct ReferenceFrame: Codable, Sendable {
 }
 
 nonisolated enum ReferenceProtocol {
-    /// Bonjour service type advertised by the source and browsed by the measuring device.
+    /// Type de service Bonjour annoncé par la source et recherché par l'appareil de mesure.
     static let serviceType = "_equalizerref._tcp"
 }

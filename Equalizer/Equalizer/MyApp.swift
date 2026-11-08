@@ -4,7 +4,7 @@ import SwiftUI
     var body: some Scene {
         WindowGroup {
             #if os(macOS)
-            // The Mac plays the music and acts as the reference source.
+            // Le Mac joue la musique et sert de source de référence.
             ReferenceSourceView()
                 .tint(AppTheme.accent)
             #else

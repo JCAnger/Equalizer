@@ -2,38 +2,49 @@ import AVFoundation
 import Accelerate
 import Observation
 
-/// Captures audio from the microphone and produces a log-frequency spectrum,
-/// mapped into bands according to the modifiable `SpectrumSettings`.
+/// Capture le son du microphone et produit un spectre à échelle logarithmique,
+/// réparti en bandes selon les `SpectrumSettings` modifiables.
 @Observable
 final class AudioSpectrumAnalyzer {
+    // MARK: - État observable
+
+    /// Niveau (dB) de chaque bande, lissé par l'attaque et le relâchement.
     private(set) var bandLevels: [Float] = []
     private(set) var isRunning = false
+    /// Message destiné à l'utilisateur lorsque la capture ne peut pas démarrer.
     private(set) var errorMessage: String?
 
-    /// Long-term average of the band levels (dB) collected while `isMeasuring` is true.
+    /// Moyenne à long terme des niveaux de bandes (dB), calculée tant que `isMeasuring` est vrai.
     private(set) var averageBandLevels: [Float] = []
     private(set) var isMeasuring = false
-    /// Number of analysis frames included in `averageBandLevels`.
+    /// Nombre d'images d'analyse incluses dans `averageBandLevels`.
     private(set) var measuredFrameCount = 0
 
-    /// Frames whose loudest band is below this level (dB) are treated as silence
-    /// and left out of the average.
+    // MARK: - Propriétés internes
+
+    /// Les images dont la bande la plus forte est sous ce niveau (dB) sont considérées comme
+    /// du silence et exclues de la moyenne, sinon les pauses tireraient le résultat vers le bas.
     private let silenceThreshold: Float = -80
 
+    /// Somme des puissances par bande, dont on tire la moyenne.
     private var powerSums: [Double] = []
 
-    // Read from the audio tap thread; see the note on `SpectrumSettings` about benign races.
+    // Lu depuis le thread du tap audio : voir la note sur les accès concurrents dans `SpectrumSettings`.
     nonisolated(unsafe) private let settings: SpectrumSettings
     private let engine = AVAudioEngine()
 
-    // Configured on the main actor only while the tap is not installed (before start /
-    // after stop), and used from the real-time audio tap thread while running.
+    // Configuré sur le main actor uniquement quand le tap n'est pas installé (avant le
+    // démarrage ou après l'arrêt), puis utilisé depuis le thread audio temps réel pendant l'exécution.
     private let calculator = SpectrumBandCalculator()
 
     init(settings: SpectrumSettings) {
         self.settings = settings
     }
 
+    // MARK: - Cycle de vie de la capture
+
+    /// Demande l'accès au microphone, active la session audio puis démarre le moteur.
+    /// Les erreurs sont publiées dans `errorMessage`.
     func start() {
         guard !isRunning else { return }
         errorMessage = nil
@@ -48,7 +59,7 @@ final class AudioSpectrumAnalyzer {
             }
             #if os(iOS)
             do {
-                // Activating the audio session can block, so keep it off the main thread.
+                // L'activation de la session audio peut bloquer : on la sort du thread principal.
                 try await Task.detached { try Self.activateSession() }.value
             } catch {
                 await MainActor.run {
@@ -64,6 +75,8 @@ final class AudioSpectrumAnalyzer {
     }
 
     #if os(iOS)
+    /// Configure la session en enregistrement « mesure » : ce mode désactive les traitements
+    /// du signal (réduction de bruit, contrôle automatique de gain) qui fausseraient l'analyse.
     nonisolated private static func activateSession() throws {
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.record, mode: .measurement, options: [.duckOthers])
@@ -79,7 +92,9 @@ final class AudioSpectrumAnalyzer {
         isMeasuring = false
     }
 
-    /// Starts a new measurement: averages the music captured from now on.
+    // MARK: - Mesure moyenne
+
+    /// Lance une nouvelle mesure : fait la moyenne de la musique captée à partir de maintenant.
     func startMeasurement() {
         resetMeasurement()
         isMeasuring = true
@@ -95,25 +110,31 @@ final class AudioSpectrumAnalyzer {
         measuredFrameCount = 0
     }
 
-    /// Accumulates the band levels in the power domain so loud passages weigh correctly.
+    /// Cumule les niveaux de bandes dans le domaine des puissances, pour que les passages
+    /// forts pèsent correctement dans la moyenne (une moyenne directe de dB les sous-estimerait).
     @MainActor
     private func accumulate(_ newBands: [Float]) {
         guard isMeasuring, let loudest = newBands.max(), loudest > silenceThreshold else { return }
+        // Si le nombre de bandes a changé en cours de mesure, les anciennes sommes sont inutilisables.
         if powerSums.count != newBands.count {
             powerSums = [Double](repeating: 0, count: newBands.count)
             measuredFrameCount = 0
         }
         for i in newBands.indices {
+            // dB -> puissance : 10^(dB / 10)
             powerSums[i] += pow(10, Double(newBands[i]) / 10)
         }
         measuredFrameCount += 1
         let frames = Double(measuredFrameCount)
+        // Puissance moyenne -> dB : 10 · log10(moyenne)
         averageBandLevels = powerSums.map { Float(10 * log10($0 / frames)) }
     }
 
+    // MARK: - Moteur audio
+
     private func startEngine() {
         #if os(iOS)
-        // The session is configured and activated in `start()`, off the main thread.
+        // La session est configurée et activée dans `start()`, hors du thread principal.
         let session = AVAudioSession.sharedInstance()
         guard !session.currentRoute.inputs.isEmpty, session.isInputAvailable else {
             errorMessage = "Aucun périphérique d'entrée audio disponible."
@@ -121,9 +142,9 @@ final class AudioSpectrumAnalyzer {
         }
         #endif
 
-        // AVAudioEngine.prepare()/.start() throw an uncaught NSException (not a
-        // Swift error) if no input or output device is available, so every check
-        // above and below must happen first to avoid crashing the process.
+        // `AVAudioEngine.prepare()` et `.start()` lèvent une NSException (et non une erreur
+        // Swift) si aucun périphérique d'entrée ou de sortie n'est disponible. Toutes les
+        // vérifications doivent donc avoir lieu avant, sinon le processus plante.
         let input = engine.inputNode
         let format = input.inputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else {
@@ -135,6 +156,7 @@ final class AudioSpectrumAnalyzer {
 
         calculator.configure(fftSize: settings.fftSize)
 
+        // On retire un éventuel tap résiduel : en installer deux sur le même bus est une erreur fatale.
         input.removeTap(onBus: 0)
         input.installTap(onBus: 0, bufferSize: UInt32(settings.fftSize), format: format) { [weak self] buffer, _ in
             self?.process(buffer: buffer, sampleRate: Float(format.sampleRate))
@@ -148,7 +170,8 @@ final class AudioSpectrumAnalyzer {
         }
     }
 
-    // Runs on the audio engine's internal tap thread.
+    /// Calcule les bandes d'un buffer. S'exécute sur le thread interne du tap audio,
+    /// d'où le renvoi vers le main actor pour publier le résultat.
     nonisolated private func process(buffer: AVAudioPCMBuffer, sampleRate: Float) {
         guard let channelData = buffer.floatChannelData else { return }
 
@@ -165,9 +188,12 @@ final class AudioSpectrumAnalyzer {
         }
     }
 
+    /// Met à jour les niveaux affichés en les lissant : montée rapide (`attack`),
+    /// descente lente (`release`), comme sur un vumètre analogique.
     @MainActor
     private func updateBandLevels(_ newBands: [Float]) {
         accumulate(newBands)
+        // Première image, ou nombre de bandes modifié : pas de valeur précédente à lisser.
         guard bandLevels.count == newBands.count else {
             bandLevels = newBands
             return

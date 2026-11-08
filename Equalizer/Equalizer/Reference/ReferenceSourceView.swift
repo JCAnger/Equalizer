@@ -2,7 +2,7 @@
 import SwiftUI
 import Observation
 
-/// Owns the Music tap and the network broadcaster for the Mac screen.
+/// Possède le tap sur Music et le diffuseur réseau de l'écran Mac.
 @Observable
 final class ReferenceSourceModel {
     private(set) var isBroadcasting = false
@@ -14,6 +14,7 @@ final class ReferenceSourceModel {
     private let broadcaster = ReferenceBroadcaster()
 
     init() {
+        // Les rappels viennent de files privées : on repasse sur le main actor avant de toucher à l'état.
         tap.onFrame = { [broadcaster] frame in
             broadcaster.send(frame)
         }
@@ -30,6 +31,7 @@ final class ReferenceSourceModel {
         }
     }
 
+    /// Démarre l'annonce Bonjour puis la capture de Music.
     func start() {
         guard !isBroadcasting else { return }
         errorMessage = nil
@@ -39,6 +41,7 @@ final class ReferenceSourceModel {
             isBroadcasting = true
         } catch {
             errorMessage = error.localizedDescription
+            // Si l'un des deux a démarré avant l'échec, on arrête l'autre pour revenir à un état propre.
             tap.stop()
             broadcaster.stop()
         }
@@ -51,7 +54,7 @@ final class ReferenceSourceModel {
     }
 }
 
-/// Mac screen: sends what Music plays to the measuring iPhone.
+/// Écran du Mac : envoie ce que joue Music à l'iPhone de mesure.
 struct ReferenceSourceView: View {
     @State private var model = ReferenceSourceModel()
 

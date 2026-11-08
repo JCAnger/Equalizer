@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// Lets the user tweak every parameter that shapes the spectrum curve.
+/// Permet de régler chaque paramètre qui façonne la courbe du spectre.
+/// Les modifications s'appliquent immédiatement, car les réglages sont lus en continu par l'analyse.
 struct SettingsView: View {
     @Bindable var settings: SpectrumSettings
     @Environment(\.dismiss) private var dismiss
@@ -73,8 +74,9 @@ struct SettingsView: View {
         }
     }
 
-    /// Maps a 30–20000 Hz frequency to/from a 0...1 slider using a logarithmic scale,
-    /// so the whole audible range is comfortably reachable with one slider.
+    /// Convertit une fréquence de 20 à 20 000 Hz en position de curseur 0...1 (et inversement)
+    /// sur une échelle logarithmique : toute la plage audible reste facile à atteindre avec un
+    /// seul curseur, alors qu'une échelle linéaire écraserait les graves.
     private func logBinding(_ keyPath: ReferenceWritableKeyPath<SpectrumSettings, Double>) -> Binding<Double> {
         let logLow = log10(20.0)
         let logHigh = log10(20_000.0)
