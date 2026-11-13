@@ -51,11 +51,7 @@ nonisolated final class ReferenceClient: @unchecked Sendable {
     }
 
     private func connect(to result: NWBrowser.Result) {
-        var name = "Source"
-        if case let .service(serviceName, _, _, _) = result.endpoint {
-            name = serviceName
-        }
-
+        let name = Self.displayName(of: result.endpoint)
         let connection = NWConnection(to: result.endpoint, using: .tcp)
         connection.stateUpdateHandler = { [weak self, weak connection] state in
             guard let self, let connection else { return }
@@ -78,6 +74,15 @@ nonisolated final class ReferenceClient: @unchecked Sendable {
         }
         self.connection = connection
         connection.start(queue: queue)
+    }
+
+    /// Nom affichable d'une source : passer par une fonction donne une constante simple,
+    /// que le compilateur sait capturer sans risque dans un rappel concurrent.
+    private static func displayName(of endpoint: NWEndpoint) -> String {
+        if case let .service(serviceName, _, _, _) = endpoint {
+            return serviceName
+        }
+        return "Source"
     }
 
     /// Retente une connexion après un court délai, pour ne pas boucler sur une source indisponible.

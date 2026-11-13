@@ -13,68 +13,70 @@ struct SpectrumView: View {
     private let axisLabels: [Double] = [30, 100, 200, 1_000,2000, 10_000, 20_000]
     /// Positions des lignes de la grille et des repères en dB, de 1 (haut) à 0 (bas).
     private let gridFractions: [Double] = [1, 0.75, 0.5, 0.25, 0]
-    private let decibelAxisWidth: CGFloat = 34
+    /// Retrait des graduations dB depuis le bord gauche, pour échapper à l'arrondi des coins (rayon 24).
+    private let decibelLabelInset: CGFloat = 16
 
     var body: some View {
         VStack(spacing: 4) {
-            HStack(alignment: .top, spacing: 6) {
-                VStack(spacing: 2) {
-                    Text("dB")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    decibelAxis
+            Canvas { context, size in
+                // Ordre de dessin : grille au fond, niveaux, référence, puis graduations
+                // par-dessus pour qu'elles restent visibles.
+                drawGrid(context: context, size: size)
+                switch settings.displayStyle {
+                case .bars:
+                    drawBars(context: context, size: size)
+                case .curve:
+                    drawCurve(context: context, size: size)
                 }
-                .frame(width: decibelAxisWidth)
-
-                Canvas { context, size in
-                    // Ordre de dessin : grille au fond, niveaux, puis référence par-dessus.
-                    drawGrid(context: context, size: size)
-                    switch settings.displayStyle {
-                    case .bars:
-                        drawBars(context: context, size: size)
-                    case .curve:
-                        drawCurve(context: context, size: size)
-                    }
-                    drawReference(context: context, size: size)
-                }
-                .background(
-                    LinearGradient(
-                        colors: [AppTheme.deepBlue, AppTheme.deepTeal],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 24))
-                .glassSurface(in: .rect(cornerRadius: 24), isClear: true)
+                drawReference(context: context, size: size)
+                drawDecibelLabels(context: context, size: size)
             }
+            .background(
+                LinearGradient(
+                    colors: [AppTheme.deepBlue, AppTheme.deepTeal],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 24))
+            .glassSurface(in: .rect(cornerRadius: 24), isClear: true)
 
             frequencyAxis
-                .padding(.leading, decibelAxisWidth + 6)
         }
         .padding(8)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background { AppBackground() }
+        // Le spectre reste sur fond sombre même en mode clair : un fond pastel lumineux autour
+        // du graphique sombre crée un contraste trop fort. Forcer le mode sombre donne aussi
+        // des textes d'axes clairs, lisibles sur ce fond.
+        .environment(\.colorScheme, .dark)
     }
 
-    /// Repères en dB à gauche du graphique, alignés sur les lignes de la grille.
-    private var decibelAxis: some View {
-        GeometryReader { geo in
-            ZStack(alignment: .topTrailing) {
-                ForEach(gridFractions, id: \.self) { fraction in
-                    let db = settings.minDecibels + Float(fraction) * (settings.maxDecibels - settings.minDecibels)
-                    Text("\(Int(db))")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .position(x: geo.size.width - 18, y: yPosition(for: fraction, height: geo.size.height))
-                }
-            }
+    /// Graduations en dB dessinées dans le graphique, juste au-dessus de chaque ligne de grille
+    /// (en dessous pour la ligne du haut, qui n'a pas de place au-dessus).
+    /// Chaque valeur est posée sur une pastille sombre translucide : sans elle, le texte blanc
+    /// serait illisible sur les barres pastel qu'il recouvre.
+    private func drawDecibelLabels(context: GraphicsContext, size: CGSize) {
+        let padding = CGSize(width: 4, height: 1)
+        for fraction in gridFractions {
+            let db = settings.minDecibels + Float(fraction) * (settings.maxDecibels - settings.minDecibels)
+            // L'unité n'est indiquée que sur la graduation du haut, pour ne pas surcharger.
+            let text = fraction == 1 ? "\(Int(db)) dB" : "\(Int(db))"
+            let resolved = context.resolve(Text(text).font(.caption2).foregroundStyle(.white.opacity(0.9)))
+            let textSize = resolved.measure(in: size)
+
+            let lineY = size.height * (1 - fraction)
+            let isTop = fraction == 1
+            let badgeHeight = textSize.height + padding.height * 2
+            let badge = CGRect(
+                x: decibelLabelInset,
+                y: isTop ? lineY + 2 : lineY - 2 - badgeHeight,
+                width: textSize.width + padding.width * 2,
+                height: badgeHeight
+            )
+            context.fill(Path(roundedRect: badge, cornerRadius: badgeHeight / 2), with: .color(AppTheme.deepBlue.opacity(0.7)))
+            context.draw(resolved, at: CGPoint(x: badge.midX, y: badge.midY), anchor: .center)
         }
-    }
-
-    /// Position verticale d'un repère, bornée à 6 pt des bords pour que le texte ne soit pas rogné.
-    private func yPosition(for fraction: Double, height: CGFloat) -> CGFloat {
-        let clamped = min(max(height * (1 - fraction), 6), height - 6)
-        return clamped
     }
 
     /// Repères de fréquence sous le graphique, placés sur l'échelle logarithmique.
@@ -129,10 +131,11 @@ struct SpectrumView: View {
         let barWidth = max((size.width - spacing * CGFloat(levels.count - 1)) / CGFloat(levels.count), 1)
 
         // Un seul dégradé partagé par toutes les barres, ancré sur toute la hauteur de la vue :
-        // menthe en bas (faible) vers bleu ciel en haut (fort), si bien que la couleur d'une
+        // bleu en bas (faible) vers rose en haut (fort), si bien que la couleur d'une
         // barre révèle son niveau, comme sur un vumètre classique.
         let barGradient = GraphicsContext.Shading.linearGradient(
-            Gradient(colors: [AppTheme.mint, AppTheme.sky]),
+            // Le violet intermédiaire évite une zone grisâtre entre le bleu et le rose.
+            Gradient(colors: [AppTheme.spectrumLow, AppTheme.spectrumMid, AppTheme.spectrumHigh]),
             startPoint: CGPoint(x: 0, y: size.height),
             endPoint: CGPoint(x: 0, y: 0)
         )

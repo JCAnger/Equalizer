@@ -14,6 +14,17 @@ enum AppTheme {
     /// Versions profondes et désaturées, utilisées derrière le spectre et en mode sombre.
     static let deepTeal = Color(red: 0.05, green: 0.16, blue: 0.19)
     static let deepBlue = Color(red: 0.07, green: 0.12, blue: 0.24)
+
+    /// Dégradé des barres du spectre, du bas (niveau faible) vers le haut (niveau fort).
+    /// Plus saturé que la palette pastel : sur le fond sombre du graphique, l'écart de teinte
+    /// doit se voir nettement pour que la couleur d'une barre indique son niveau.
+    static let spectrumLow = Color(red: 0.25, green: 0.50, blue: 0.95)
+    static let spectrumMid = Color(red: 0.62, green: 0.45, blue: 0.95)
+    static let spectrumHigh = Color(red: 0.98, green: 0.45, blue: 0.72)
+
+    /// Animation des apparitions en fondu. Sans mouvement, elle reste adaptée lorsque
+    /// « Réduire les animations » est activé.
+    static let fade = Animation.smooth(duration: 0.4)
 }
 
 /// Dégradé pastel doux que les contrôles Liquid Glass réfractent : sans fond coloré,

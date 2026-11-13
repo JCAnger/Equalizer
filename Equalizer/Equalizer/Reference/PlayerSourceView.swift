@@ -10,14 +10,25 @@ import AVKit
 @Observable
 final class PlayerSourceModel {
     private(set) var fileName: String?
-    private(set) var isPlaying = false
+    private(set) var isPlaying = false {
+        didSet {
+            // Vidé à l'arrêt pour qu'une reprise de lecture ne montre pas un spectre périmé.
+            if !isPlaying { bandLevels = [] }
+        }
+    }
     /// Nombre d'appareils de mesure actuellement connectés.
     private(set) var clientCount = 0
     private(set) var errorMessage: String?
     /// Sortie vers laquelle le son est envoyé, affichée pour aider à diagnostiquer un silence.
     private(set) var outputName: String?
+    /// Spectre lissé de ce qui est envoyé aux enceintes, identique à ce que reçoit l'appareil de
+    /// mesure : il sert à vérifier visuellement la référence sur l'appareil source.
+    private(set) var bandLevels: [Float] = []
+    /// Morceaux déjà ouverts, du plus récent au plus ancien, proposés dans le menu.
+    private(set) var recentTracks: [RecentTrack] = []
 
-    private let settings = SpectrumSettings()
+    let settings = SpectrumSettings()
+    private let recentStore = RecentTracksStore()
     private let player = ReferencePlayer()
     private let broadcaster = ReferenceBroadcaster()
     private var isBroadcasting = false
@@ -25,17 +36,21 @@ final class PlayerSourceModel {
     private var accessedURL: URL?
 
     init() {
+        recentTracks = recentStore.load()
         // Les rappels viennent de threads audio ou réseau : on repasse sur le main actor avant de toucher à l'état.
-        player.onFrame = { [broadcaster] frame in
+        player.onFrame = { [broadcaster, weak self] frame in
             broadcaster.send(frame)
+            Task { @MainActor [weak self] in
+                self?.updateBandLevels(frame.bands)
+            }
         }
         broadcaster.onClientCountChange = { [weak self] count in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 self?.clientCount = count
             }
         }
         broadcaster.onFailure = { [weak self] message in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 self?.errorMessage = message
             }
         }
@@ -61,8 +76,11 @@ final class PlayerSourceModel {
         releaseFile()
     }
 
-    /// Charge un morceau choisi par l'utilisateur.
-    func load(_ url: URL) {
+    /// Charge un morceau choisi par l'utilisateur et l'ajoute aux morceaux récents.
+    /// - Parameters:
+    ///   - url: fichier ou morceau de la bibliothèque Musique.
+    ///   - title: nom à afficher ; à défaut, le nom du fichier sans extension.
+    func load(_ url: URL, title: String? = nil) {
         errorMessage = nil
         releaseFile()
         // Nécessaire pour lire un fichier choisi hors du bac à sable de l'app (sélecteur de fichiers).
@@ -71,8 +89,13 @@ final class PlayerSourceModel {
         }
         do {
             try player.load(url, config: settings.analysisConfig)
-            fileName = url.lastPathComponent
+            fileName = title ?? url.deletingPathExtension().lastPathComponent
             isPlaying = false
+            // Le bookmark doit être créé pendant que l'accès sécurisé est ouvert, donc ici.
+            // Le recréer à chaque ouverture le garde aussi à jour si le fichier a bougé.
+            if let track = recentStore.makeTrack(for: url, title: title) {
+                recentTracks = recentStore.adding(track, to: recentTracks)
+            }
         } catch {
             fileName = nil
             isPlaying = false
@@ -80,11 +103,22 @@ final class PlayerSourceModel {
         }
     }
 
-    func loadNoise(_ color: NoiseColor) {
+    /// Rouvre un morceau récent. S'il n'est plus accessible, il est retiré de la liste.
+    func loadRecent(_ track: RecentTrack) {
+        guard let url = recentStore.resolveURL(of: track) else {
+            recentTracks = recentStore.removing(track, from: recentTracks)
+            errorMessage = "« \(track.name) » n'est plus disponible : il a peut-être été supprimé ou déplacé."
+            return
+        }
+        load(url, title: track.name)
+    }
+
+    /// Remplace le morceau par un signal de test généré (bruit, balayage, bruit par bande).
+    func loadSignal(_ signal: GeneratedSignal) {
         errorMessage = nil
         releaseFile()
-        player.loadNoise(color, config: settings.analysisConfig)
-        fileName = color == .pink ? "Bruit rose" : "Bruit blanc"
+        player.loadSignal(signal, config: settings.analysisConfig)
+        fileName = signal.title
         isPlaying = false
     }
 
@@ -116,6 +150,21 @@ final class PlayerSourceModel {
         errorMessage = error.localizedDescription
     }
 
+    /// Même lissage attaque/relâchement que la courbe du microphone, pour que les deux écrans
+    /// bougent de la même façon et restent comparables à l'œil.
+    private func updateBandLevels(_ bands: [Float]) {
+        // Ignore les images arrivées juste après une pause.
+        guard isPlaying else { return }
+        guard bandLevels.count == bands.count else {
+            bandLevels = bands
+            return
+        }
+        for i in bands.indices {
+            let coefficient = bands[i] > bandLevels[i] ? settings.attack : settings.release
+            bandLevels[i] += (bands[i] - bandLevels[i]) * coefficient
+        }
+    }
+
     private func releaseFile() {
         accessedURL?.stopAccessingSecurityScopedResource()
         accessedURL = nil
@@ -127,19 +176,103 @@ final class PlayerSourceModel {
 struct PlayerSourceView: View {
     @State private var model = PlayerSourceModel()
     @State private var showingImporter = false
+    @State private var showingGenerator = false
     #if os(iOS)
     @State private var showingLibrary = false
     #endif
 
     var body: some View {
         VStack(spacing: 16) {
+            // Spectre de ce qui est envoyé aux enceintes, pour vérifier la référence à l'œil.
+            // Affiché seulement pendant la lecture : à l'arrêt, il n'y aurait rien à montrer.
+            if model.isPlaying {
+                SpectrumView(levels: model.bandLevels, settings: model.settings)
+                    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                    .transition(.opacity)
+            }
+            controlsCard
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background { AppBackground() }
+        .animation(AppTheme.fade, value: model.isPlaying)
+        .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.audio]) { result in
+            switch result {
+            case let .success(url):
+                model.load(url)
+            case let .failure(error):
+                model.fail(with: error)
+            }
+        }
+        #if os(iOS)
+        .sheet(isPresented: $showingLibrary) {
+            MusicLibraryPicker { url, title in
+                if let url {
+                    model.load(url, title: title)
+                } else {
+                    model.libraryItemUnavailable()
+                }
+            }
+        }
+        #endif
+        .sheet(isPresented: $showingGenerator) {
+            TestSignalView { signal in model.loadSignal(signal) }
+        }
+        .onAppear { model.startBroadcasting() }
+        .onDisappear { model.shutDown() }
+    }
+
+    /// Menu unique de choix du son : son libellé affiche le morceau en cours, et il propose
+    /// les morceaux récents puis les autres sources.
+    private var sourceMenu: some View {
+        Menu {
+            if !model.recentTracks.isEmpty {
+                Section("Récents") {
+                    ForEach(model.recentTracks) { track in
+                        Button {
+                            model.loadRecent(track)
+                        } label: {
+                            // La coche repère le morceau actuellement chargé.
+                            if track.name == model.fileName {
+                                Label(track.name, systemImage: "checkmark")
+                            } else {
+                                Text(track.name)
+                            }
+                        }
+                    }
+                }
+            }
+            Section {
+                #if os(iOS)
+                Button("Musique…", systemImage: "music.note") { showingLibrary = true }
+                #endif
+                Button("Fichiers…", systemImage: "folder") { showingImporter = true }
+            }
+            Section {
+                Button("Bruit rose", systemImage: "waveform") { model.loadSignal(.noise(.pink)) }
+                Button("Bruit blanc", systemImage: "waveform") { model.loadSignal(.noise(.white)) }
+                Button("Générateur…", systemImage: "slider.horizontal.below.waveform") { showingGenerator = true }
+            }
+        } label: {
+            Label(model.fileName ?? "Choisir un morceau", systemImage: "chevron.up.chevron.down")
+                .labelStyle(TrailingIconLabelStyle())
+                .font(.headline)
+                .lineLimit(1)
+        }
+        .glassButtonStyle()
+        .controlSize(.large)
+        .accessibilityLabel("Morceau")
+        .accessibilityValue(model.fileName ?? "Aucun morceau choisi")
+    }
+
+    /// Carte avec le morceau choisi, l'état de la connexion et les commandes de lecture.
+    private var controlsCard: some View {
+        VStack(spacing: 16) {
             Image(systemName: model.isPlaying ? "speaker.wave.3.fill" : "speaker.fill")
                 .font(.system(size: 44))
                 .foregroundStyle(model.isPlaying ? AppTheme.seafoam : .secondary)
 
-            Text(model.fileName ?? "Aucun morceau choisi")
-                .font(.headline)
-                .multilineTextAlignment(.center)
+            sourceMenu
 
             #if os(iOS)
             if model.isPlaying {
@@ -157,24 +290,6 @@ struct PlayerSourceView: View {
 
             Text(model.clientCount == 0 ? "En attente de l'appareil de mesure…" : "\(model.clientCount) appareil(s) connecté(s)")
                 .font(.footnote)
-
-            HStack {
-                #if os(iOS)
-                Button("Musique") { showingLibrary = true }
-                    .glassButtonStyle()
-                #endif
-                Button("Fichiers") { showingImporter = true }
-                    .glassButtonStyle()
-            }
-            .controlSize(.large)
-
-            HStack {
-                Button("Bruit rose") { model.loadNoise(.pink) }
-                    .glassButtonStyle()
-                Button("Bruit blanc") { model.loadNoise(.white) }
-                    .glassButtonStyle()
-            }
-            .controlSize(.large)
 
             Button(model.isPlaying ? "Pause" : "Lecture") { model.togglePlayback() }
                 .glassProminentButtonStyle()
@@ -198,30 +313,18 @@ struct PlayerSourceView: View {
             }
         }
         .glassCard()
-        .padding(24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background { AppBackground() }
-        .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.audio]) { result in
-            switch result {
-            case let .success(url):
-                model.load(url)
-            case let .failure(error):
-                model.fail(with: error)
-            }
+    }
+}
+
+/// Place l'icône après le texte, comme l'indicateur d'un menu déroulant.
+private struct TrailingIconLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 8) {
+            configuration.title
+            configuration.icon
+                .imageScale(.small)
+                .foregroundStyle(.secondary)
         }
-        #if os(iOS)
-        .sheet(isPresented: $showingLibrary) {
-            MusicLibraryPicker { url in
-                if let url {
-                    model.load(url)
-                } else {
-                    model.libraryItemUnavailable()
-                }
-            }
-        }
-        #endif
-        .onAppear { model.startBroadcasting() }
-        .onDisappear { model.shutDown() }
     }
 }
 
@@ -241,8 +344,9 @@ struct AirPlayRoutePicker: UIViewRepresentable {
 
 /// Permet de choisir un morceau dans la bibliothèque Musique. Seuls les morceaux téléchargés
 /// sur l'appareil et sans DRM exposent une URL ; sinon le rappel reçoit `nil`.
+/// Le titre est transmis à part : l'URL de la bibliothèque ne contient qu'un nom générique.
 struct MusicLibraryPicker: UIViewControllerRepresentable {
-    let onPick: (URL?) -> Void
+    let onPick: (URL?, String?) -> Void
     @Environment(\.dismiss) private var dismiss
 
     func makeUIViewController(context: Context) -> MPMediaPickerController {
@@ -267,7 +371,8 @@ struct MusicLibraryPicker: UIViewControllerRepresentable {
         }
 
         func mediaPicker(_ mediaPicker: MPMediaPickerController, didPickMediaItems mediaItemCollection: MPMediaItemCollection) {
-            parent.onPick(mediaItemCollection.items.first?.assetURL)
+            let item = mediaItemCollection.items.first
+            parent.onPick(item?.assetURL, item?.title)
             parent.dismiss()
         }
 

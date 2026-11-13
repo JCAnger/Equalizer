@@ -21,10 +21,10 @@ struct RootView: View {
         switch role {
         case .analysis:
             ContentView()
-                .overlay(alignment: .bottomLeading) { changeRoleButton }
+                .overlay(alignment: .bottom) { changeRoleButton }
         case .source:
             PlayerSourceView()
-                .overlay(alignment: .bottomLeading) { changeRoleButton }
+                .overlay(alignment: .bottom) { changeRoleButton }
         case nil:
             roleChooser
         }
@@ -35,7 +35,6 @@ struct RootView: View {
         Button("Changer de rôle") { storedRole = "" }
             .glassButtonStyle()
             .controlSize(.small)
-            .padding(.leading, 44)
             .padding(.bottom, 8)
     }
 

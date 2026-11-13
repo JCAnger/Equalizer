@@ -26,7 +26,8 @@ nonisolated final class ReferencePlayer: @unchecked Sendable {
     private let lock = NSLock()
 
     private var file: AVAudioFile?
-    private var noiseColor: NoiseColor?
+    /// Signal généré joué à la place d'un fichier (bruit, balayage…), `nil` pour un fichier.
+    private var signal: GeneratedSignal?
     /// Faux tant que le graphe audio n'a pas été (re)construit après un chargement.
     private var isGraphReady = false
     private var isScheduled = false
@@ -95,8 +96,8 @@ nonisolated final class ReferencePlayer: @unchecked Sendable {
         try? AVAudioSession.sharedInstance().setActive(true)
         #endif
         guard (try? engine.start()) != nil else { return }
-        // Le bruit généré est joué par son propre nœud source : seul le lecteur de fichier a besoin de `play()`.
-        if noiseColor == nil { node.play() }
+        // Le signal généré est joué par son propre nœud source : seul le lecteur de fichier a besoin de `play()`.
+        if signal == nil { node.play() }
     }
 
     /// Charge un fichier audio. Le graphe est reconstruit au prochain `play()`.
@@ -104,17 +105,16 @@ nonisolated final class ReferencePlayer: @unchecked Sendable {
     func load(_ url: URL, config: SpectrumConfig) throws {
         stop()
         file = try AVAudioFile(forReading: url)
-        noiseColor = nil
+        signal = nil
         self.config = config
         isGraphReady = false
     }
 
-    /// Utilise un bruit généré (rose ou blanc) à la place d'un fichier.
-    /// Le bruit rose a une énergie égale par octave : c'est un signal de test classique.
-    func loadNoise(_ color: NoiseColor, config: SpectrumConfig) {
+    /// Utilise un signal de test généré (bruit, balayage, bruit par bande) à la place d'un fichier.
+    func loadSignal(_ signal: GeneratedSignal, config: SpectrumConfig) {
         stop()
         file = nil
-        noiseColor = color
+        self.signal = signal
         self.config = config
         isGraphReady = false
     }
@@ -122,7 +122,7 @@ nonisolated final class ReferencePlayer: @unchecked Sendable {
     /// Démarre (ou reprend) la lecture.
     /// - Throws: `PlayerError.noFile` si rien n'est chargé, ou l'erreur de la session / du moteur.
     func play() throws {
-        guard noiseColor != nil || file != nil else { throw PlayerError.noFile }
+        guard signal != nil || file != nil else { throw PlayerError.noFile }
 
         #if os(iOS)
         let session = AVAudioSession.sharedInstance()
@@ -141,8 +141,8 @@ nonisolated final class ReferencePlayer: @unchecked Sendable {
         isActive = true
         lock.unlock()
 
-        // Le bruit est produit en continu par le moteur : pas de fichier à planifier.
-        guard noiseColor == nil else { return }
+        // Le signal est produit en continu par le moteur : pas de fichier à planifier.
+        guard signal == nil else { return }
         setWantsPlayback(true)
         if !isScheduled {
             isScheduled = true
@@ -155,8 +155,8 @@ nonisolated final class ReferencePlayer: @unchecked Sendable {
         lock.lock()
         isActive = false
         lock.unlock()
-        if noiseColor != nil {
-            // Le générateur de bruit n'a pas de nœud lecteur à mettre en pause : on suspend tout le moteur.
+        if signal != nil {
+            // Le générateur de signal n'a pas de nœud lecteur à mettre en pause : on suspend tout le moteur.
             engine.pause()
         } else {
             node.pause()
@@ -191,12 +191,12 @@ nonisolated final class ReferencePlayer: @unchecked Sendable {
             engine.detach(noiseNode)
             self.noiseNode = nil
         }
-        if let color = noiseColor {
+        if let signal {
             let sampleRate = engine.mainMixerNode.outputFormat(forBus: 0).sampleRate
             guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1) else {
                 throw PlayerError.noFile
             }
-            let generator = NoiseGenerator(color: color)
+            let generator = SignalGenerator(signal: signal, sampleRate: Float(sampleRate))
             // Ce bloc est appelé sur le thread de rendu : il ne doit ni allouer ni bloquer.
             let source = AVAudioSourceNode(format: format) { _, _, frameCount, audioBufferList in
                 let buffers = UnsafeMutableAudioBufferListPointer(audioBufferList)
@@ -277,34 +277,158 @@ nonisolated final class ReferencePlayer: @unchecked Sendable {
     }
 }
 
-/// Signaux de test générés : le bruit rose a une énergie égale par octave, le bruit blanc par hertz.
-nonisolated enum NoiseColor {
+/// Couleurs de bruit : le bruit rose a une énergie égale par octave, le bruit blanc par hertz.
+nonisolated enum NoiseColor: Equatable, Sendable {
     case pink
     case white
 }
 
-/// Bruit blanc, éventuellement filtré en bruit rose (-3 dB/octave) avec le filtre de Paul Kellet.
-/// Utilisé depuis un seul thread de rendu audio, d'où l'absence de verrou sur l'état du filtre.
-private nonisolated final class NoiseGenerator {
-    private let color: NoiseColor
-    /// État du filtre rose (trois filtres passe-bas du premier ordre en parallèle).
+/// Signaux de test que le lecteur sait produire lui-même.
+nonisolated enum GeneratedSignal: Equatable, Sendable {
+    case noise(NoiseColor)
+    /// Sinus dont la fréquence monte de façon logarithmique de `startFrequency` à
+    /// `endFrequency` en `duration` secondes, puis recommence.
+    case sweep(startFrequency: Double, endFrequency: Double, duration: Double)
+    /// Bruit rose limité à la plage `lowFrequency`–`highFrequency`, pour tester une seule zone.
+    case bandNoise(lowFrequency: Double, highFrequency: Double)
+}
+
+/// Produit les échantillons d'un `GeneratedSignal`.
+/// Utilisé depuis un seul thread de rendu audio, d'où l'absence de verrou sur son état.
+private nonisolated final class SignalGenerator {
+    /// Niveau de sortie commun : laisse de la marge avant saturation, à un volume d'écoute raisonnable.
+    private static let outputLevel: Float = 0.3
+
+    private let signal: GeneratedSignal
+    private let sampleRate: Float
+
+    // État du filtre rose (trois filtres passe-bas du premier ordre en parallèle).
     private var b0: Float = 0
     private var b1: Float = 0
     private var b2: Float = 0
 
-    init(color: NoiseColor) {
-        self.color = color
+    // État du balayage.
+    private var phase: Float = 0
+    private var elapsedSamples = 0
+
+    // Filtres et gain du bruit par bande.
+    private var bandFilters: [Biquad] = []
+    private var bandGain: Float = 1
+
+    init(signal: GeneratedSignal, sampleRate: Float) {
+        self.signal = signal
+        self.sampleRate = sampleRate
+        if case let .bandNoise(low, high) = signal {
+            let lowCut = Float(min(low, high))
+            let highCut = Float(max(low, high))
+            // Deux filtres en cascade de chaque côté (4e ordre) : des flancs assez raides
+            // pour que l'énergie reste dans la zone testée.
+            bandFilters = [
+                .highPass(cutoff: lowCut, sampleRate: sampleRate),
+                .highPass(cutoff: lowCut, sampleRate: sampleRate),
+                .lowPass(cutoff: highCut, sampleRate: sampleRate),
+                .lowPass(cutoff: highCut, sampleRate: sampleRate)
+            ]
+            // Le bruit rose répartit son énergie sur ~10 octaves : une bande étroite en garde
+            // une petite part. On compense pour garder un niveau d'écoute comparable, sans
+            // dépasser ×4 pour ne pas saturer.
+            let bandOctaves = max(log2(highCut / max(lowCut, 1)), 0.1)
+            bandGain = min((10 / bandOctaves).squareRoot(), 4)
+        }
     }
 
     /// Produit l'échantillon suivant.
     func next() -> Float {
+        switch signal {
+        case .noise(.white):
+            return Float.random(in: -1...1) * Self.outputLevel
+        case .noise(.pink):
+            return nextPink()
+        case let .sweep(start, end, duration):
+            return nextSweep(start: Float(start), end: Float(end), duration: Float(duration))
+        case .bandNoise:
+            var sample = nextPink()
+            for index in bandFilters.indices {
+                sample = bandFilters[index].process(sample)
+            }
+            return min(max(sample * bandGain, -1), 1)
+        }
+    }
+
+    private func nextPink() -> Float {
         let white = Float.random(in: -1...1)
-        // Le facteur 0,3 ramène le bruit blanc à un niveau d'écoute raisonnable.
-        if color == .white { return white * 0.3 }
         // Coefficients du filtre de Paul Kellet : ils approchent une pente de -3 dB/octave.
         b0 = 0.99765 * b0 + white * 0.0990460
         b1 = 0.96300 * b1 + white * 0.2965164
         b2 = 0.57000 * b2 + white * 1.0526913
-        return (b0 + b1 + b2 + white * 0.1848) * 0.25
+        return (b0 + b1 + b2 + white * 0.1848) * Self.pinkScale
+    }
+
+    /// Gain de sortie du filtre rose, mesuré : niveau efficace ≈ 0,15 et crêtes ≈ 0,65.
+    /// L'ancienne valeur (0,25) donnait des crêtes à 1,9 et saturait près de 2 % des
+    /// échantillons, ce qui déformait le spectre de référence.
+    private static let pinkScale: Float = 0.087
+
+    private func nextSweep(start: Float, end: Float, duration: Float) -> Float {
+        let totalSamples = max(Int(duration * sampleRate), 1)
+        let progress = Float(elapsedSamples) / Float(totalSamples)
+        // Progression logarithmique : chaque octave dure le même temps, comme l'oreille la perçoit.
+        let frequency = start * pow(end / start, progress)
+        // La phase est cumulée échantillon par échantillon pour rester continue
+        // quand la fréquence change, sinon on entendrait des clics.
+        phase += 2 * .pi * frequency / sampleRate
+        if phase > 2 * .pi { phase -= 2 * .pi }
+        elapsedSamples = (elapsedSamples + 1) % totalSamples
+        return sin(phase) * Self.outputLevel
+    }
+}
+
+/// Filtre biquadratique (formules du « Audio EQ Cookbook » de Robert Bristow-Johnson).
+private nonisolated struct Biquad {
+    private var b0: Float, b1: Float, b2: Float, a1: Float, a2: Float
+    private var x1: Float = 0, x2: Float = 0, y1: Float = 0, y2: Float = 0
+
+    /// Q de Butterworth : réponse la plus plate possible dans la bande passante.
+    private static let butterworthQ: Float = 0.7071
+
+    static func lowPass(cutoff: Float, sampleRate: Float) -> Biquad {
+        let (cosW, alpha) = parameters(cutoff: cutoff, sampleRate: sampleRate)
+        return Biquad(
+            b0: (1 - cosW) / 2, b1: 1 - cosW, b2: (1 - cosW) / 2,
+            a0: 1 + alpha, a1: -2 * cosW, a2: 1 - alpha
+        )
+    }
+
+    static func highPass(cutoff: Float, sampleRate: Float) -> Biquad {
+        let (cosW, alpha) = parameters(cutoff: cutoff, sampleRate: sampleRate)
+        return Biquad(
+            b0: (1 + cosW) / 2, b1: -(1 + cosW), b2: (1 + cosW) / 2,
+            a0: 1 + alpha, a1: -2 * cosW, a2: 1 - alpha
+        )
+    }
+
+    /// Coefficients normalisés par `a0`, pour que `process` n'ait pas à diviser.
+    private init(b0: Float, b1: Float, b2: Float, a0: Float, a1: Float, a2: Float) {
+        self.b0 = b0 / a0
+        self.b1 = b1 / a0
+        self.b2 = b2 / a0
+        self.a1 = a1 / a0
+        self.a2 = a2 / a0
+    }
+
+    private static func parameters(cutoff: Float, sampleRate: Float) -> (cosW: Float, alpha: Float) {
+        // Une coupure au-delà de Nyquist rendrait le filtre instable : on la borne juste en dessous.
+        let safeCutoff = min(max(cutoff, 1), sampleRate * 0.45)
+        let omega = 2 * .pi * safeCutoff / sampleRate
+        return (cos(omega), sin(omega) / (2 * butterworthQ))
+    }
+
+    mutating func process(_ x: Float) -> Float {
+        let y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2
+        x2 = x1
+        x1 = x
+        y2 = y1
+        y1 = y
+        return y
     }
 }
