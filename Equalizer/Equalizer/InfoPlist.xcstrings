@@ -1,12 +1,19 @@
 {
-  "sourceLanguage" : "en",
+  "sourceLanguage" : "fr",
   "strings" : {
     "CFBundleDisplayName" : {
       "comment" : "Bundle display name",
+      "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "needs_review",
+            "value" : "Equalizer"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "new",
             "value" : "Equalizer"
           }
         },
@@ -20,6 +27,7 @@
     },
     "CFBundleName" : {
       "comment" : "Bundle name",
+      "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -27,44 +35,39 @@
             "value" : "Equalizer"
           }
         },
-        "zh-Hans" : {
+        "fr" : {
           "stringUnit" : {
-            "state" : "needs_review",
+            "state" : "new",
             "value" : "Equalizer"
-          }
-        }
-      }
-    },
-    "NSAppleMusicUsageDescription" : {
-      "comment" : "Privacy - Media Library Usage Description",
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Equalizer plays a track from your Music library to compare it with what your speakers reproduce."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Equalizer 会读取您音乐资料库中的一首曲目，以便与扬声器实际播放的声音进行比较。"
+            "value" : "Equalizer"
           }
         }
       }
     },
     "NSLocalNetworkUsageDescription" : {
       "comment" : "Privacy - Local Network Usage Description",
+      "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "machine_translated",
+            "state" : "needs_review",
             "value" : "Equalizer uses the local network to send noise to your AirPlay speakers."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Equalizer utilise le réseau local pour envoyer le bruit vers vos enceintes AirPlay."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
-            "state" : "machine_translated",
+            "state" : "needs_review",
             "value" : "本 App 会使用本地网络，将噪声发送到您的 AirPlay 扬声器。"
           }
         }
@@ -72,10 +75,17 @@
     },
     "NSMicrophoneUsageDescription" : {
       "comment" : "Privacy - Microphone Usage Description",
+      "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "needs_review",
+            "value" : "This app analyzes audio from the microphone to display a live frequency spectrum."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "new",
             "value" : "This app analyzes audio from the microphone to display a live frequency spectrum."
           }
         },

@@ -151,7 +151,7 @@ extension View {
     ///   - isClear: utilise la variante de verre `.clear`, plus transparente.
     @ViewBuilder
     func glassSurface<S: InsettableShape>(in shape: S, isClear: Bool = false) -> some View {
-        if #available(iOS 26.0, macCatalyst 26.0, macOS 26.0, visionOS 26.0, *) {
+        if #available(iOS 26.0, macCatalyst 26.0, macOS 26.0, *) {
             glassEffect(isClear ? .clear : .regular, in: shape)
         } else {
             modifier(PastelSurface(shape: shape, isClear: isClear))
@@ -161,7 +161,7 @@ extension View {
     /// Style de bouton `.glass`, ou capsule pastel avant iOS 26.
     @ViewBuilder
     func glassButtonStyle() -> some View {
-        if #available(iOS 26.0, macCatalyst 26.0, macOS 26.0, visionOS 26.0, *) {
+        if #available(iOS 26.0, macCatalyst 26.0, macOS 26.0, *) {
             buttonStyle(.glass)
         } else {
             buttonStyle(PastelButtonStyle(isProminent: false))
@@ -171,7 +171,7 @@ extension View {
     /// Style de bouton `.glassProminent`, ou capsule d'accent avant iOS 26.
     @ViewBuilder
     func glassProminentButtonStyle() -> some View {
-        if #available(iOS 26.0, macCatalyst 26.0, macOS 26.0, visionOS 26.0, *) {
+        if #available(iOS 26.0, macCatalyst 26.0, macOS 26.0, *) {
             buttonStyle(.glassProminent)
         } else {
             buttonStyle(PastelButtonStyle(isProminent: true))

@@ -164,7 +164,7 @@ private extension View {
     @ViewBuilder
     func controlKey(_ color: Color) -> some View {
         let shape = RoundedRectangle(cornerRadius: ControlKey.cornerRadius, style: .continuous)
-        if #available(iOS 26.0, macCatalyst 26.0, macOS 26.0, visionOS 26.0, *) {
+        if #available(iOS 26.0, macCatalyst 26.0, macOS 26.0, *) {
             frame(width: ControlKey.size, height: ControlKey.size)
                 .glassEffect(.regular.tint(color.opacity(0.75)), in: shape)
                 .contentShape(shape)
