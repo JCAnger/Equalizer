@@ -60,7 +60,7 @@ final class AudioSpectrumAnalyzer {
             #if os(iOS)
             do {
                 // L'activation de la session audio peut bloquer : on la sort du thread principal.
-                try await Task.detached { try Self.activateSession() }.value
+                try await Task.detached { try MeasurementAudioSession.activate() }.value
             } catch {
                 await MainActor.run {
                     self.errorMessage = error.localizedDescription
@@ -73,16 +73,6 @@ final class AudioSpectrumAnalyzer {
             }
         }
     }
-
-    #if os(iOS)
-    /// Configure la session en enregistrement « mesure » : ce mode désactive les traitements
-    /// du signal (réduction de bruit, contrôle automatique de gain) qui fausseraient l'analyse.
-    nonisolated private static func activateSession() throws {
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.record, mode: .measurement, options: [.duckOthers])
-        try session.setActive(true)
-    }
-    #endif
 
     func stop() {
         guard isRunning else { return }

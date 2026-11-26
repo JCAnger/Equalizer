@@ -14,9 +14,9 @@ Conseil : gardez ce fichier court. Une règle inutile dilue celles qui comptent.
 - **Nom de l'app :** [À COMPLÉTER]
 - **Objectif, en une phrase :** [À COMPLÉTER]
 - **Public visé :** [À COMPLÉTER]
-- **Plateformes :** iPhone [et iPad, si applicable]
-- **Version minimale d'iOS :** [À COMPLÉTER]
-- **Langues de l'app :** français [autres langues, si applicable]
+- **Plateformes :** iPhone ipad
+- **Version minimale d'iOS :** 18
+- **Langues de l'app :** français anglais chinois
 - **Services externes :** [aucun / CloudKit / API, à compléter]
 
 ## Façon de travailler

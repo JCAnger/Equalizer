@@ -22,6 +22,14 @@ enum AppTheme {
     static let spectrumMid = Color(red: 0.62, green: 0.45, blue: 0.95)
     static let spectrumHigh = Color(red: 0.98, green: 0.45, blue: 0.72)
 
+    /// Couleurs des boutons ronds du bas de l'écran, une par fonction. Assez profondes pour que
+    /// l'icône blanche reste lisible (contraste d'au moins 3:1 pour une icône).
+    static let controlNoise = Color(red: 0.50, green: 0.35, blue: 0.80)
+    static let controlOutput = accent
+    static let controlAnalysis = Color(red: 0.18, green: 0.545, blue: 0.435)
+    static let controlMeasure = Color(red: 0.80, green: 0.28, blue: 0.34)
+    static let controlSettings = Color(red: 0.35, green: 0.40, blue: 0.48)
+
     /// Animation des apparitions en fondu. Sans mouvement, elle reste adaptée lorsque
     /// « Réduire les animations » est activé.
     static let fade = Animation.smooth(duration: 0.4)
