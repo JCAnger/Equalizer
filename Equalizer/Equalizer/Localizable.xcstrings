@@ -68,23 +68,6 @@
         }
       }
     },
-    "%@ · volume média %lld %% · %lld Hz · %u can." : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$@ · volume média %2$lld %% · %3$lld Hz · %4$u can."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "machine_translated",
-            "value" : "%@ · 媒体音量 %lld %% · %lld Hz · %u 声道"
-          }
-        }
-      }
-    },
     "%lld" : {
       "localizations" : {
         "en" : {
@@ -1405,23 +1388,6 @@
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "输出：%@"
-          }
-        }
-      }
-    },
-    "Sortie actuelle : %@" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "machine_translated",
-            "value" : "Current output: %@"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "当前输出：%@"
           }
         }
       }

@@ -98,6 +98,7 @@
 			knownRegions = (
 				en,
 				Base,
+				"zh-Hans",
 			);
 			mainGroup = 000000000000000000000001;
 			minimizedProjectReferenceProxies = 1;
@@ -285,8 +286,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Equalizer/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Equalizer;
-				INFOPLIST_KEY_NSAppleMusicUsageDescription = "Equalizer lit un morceau de votre bibliothèque Musique pour le comparer à ce que les enceintes restituent.";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Equalizer se connecte à votre Mac pour comparer la musique jouée avec ce que capte le micro.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Equalizer utilise le réseau local pour envoyer le bruit vers vos enceintes AirPlay.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "This app analyzes audio from the microphone to display a live frequency spectrum.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
@@ -342,8 +342,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Equalizer/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Equalizer;
-				INFOPLIST_KEY_NSAppleMusicUsageDescription = "Equalizer lit un morceau de votre bibliothèque Musique pour le comparer à ce que les enceintes restituent.";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Equalizer se connecte à votre Mac pour comparer la musique jouée avec ce que capte le micro.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Equalizer utilise le réseau local pour envoyer le bruit vers vos enceintes AirPlay.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "This app analyzes audio from the microphone to display a live frequency spectrum.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;

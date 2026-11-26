@@ -37,6 +37,7 @@
     },
     "NSAppleMusicUsageDescription" : {
       "comment" : "Privacy - Media Library Usage Description",
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -57,14 +58,14 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Equalizer connects to your Mac to compare the music being played with what the microphone picks up."
+            "state" : "machine_translated",
+            "value" : "Equalizer uses the local network to send noise to your AirPlay speakers."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Equalizer 会连接到您的 Mac，以便将播放的音乐与麦克风拾取的声音进行比较。"
+            "state" : "machine_translated",
+            "value" : "本 App 会使用本地网络，将噪声发送到您的 AirPlay 扬声器。"
           }
         }
       }
