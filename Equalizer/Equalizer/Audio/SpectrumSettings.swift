@@ -20,8 +20,8 @@ nonisolated final class SpectrumSettings {
         /// Libellé affiché dans le sélecteur de style.
         var label: String {
             switch self {
-            case .bars: return "Barres"
-            case .curve: return "Courbe"
+            case .bars: return String(localized: "Barres")
+            case .curve: return String(localized: "Courbe")
             }
         }
     }

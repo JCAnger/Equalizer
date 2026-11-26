@@ -7,13 +7,13 @@ extension GeneratedSignal {
     var title: String {
         switch self {
         case .noise(.pink):
-            return "Bruit rose"
+            return String(localized: "Bruit rose")
         case .noise(.white):
-            return "Bruit blanc"
+            return String(localized: "Bruit blanc")
         case let .sweep(start, end, duration):
-            return "Balayage \(FrequencyFormat.label(start))–\(FrequencyFormat.label(end)) · \(Int(duration)) s"
+            return String(localized: "Balayage \(FrequencyFormat.label(start))–\(FrequencyFormat.label(end)) · \(Int(duration)) s")
         case let .bandNoise(low, high):
-            return "Bruit rose \(FrequencyFormat.label(low))–\(FrequencyFormat.label(high))"
+            return String(localized: "Bruit rose \(FrequencyFormat.label(low))–\(FrequencyFormat.label(high))")
         }
     }
 }
@@ -39,17 +39,17 @@ struct TestSignalView: View {
 
         var label: String {
             switch self {
-            case .sweep: return "Balayage"
-            case .bandNoise: return "Bruit par bande"
+            case .sweep: return String(localized: "Balayage")
+            case .bandNoise: return String(localized: "Bruit par bande")
             }
         }
     }
 
     /// Zones prédéfinies, alignées sur celles de l'analyse des enceintes.
     private static let presets: [(name: String, low: Double, high: Double)] = [
-        ("Graves", 60, 250),
-        ("Médiums", 250, 2_000),
-        ("Aigus", 2_000, 20_000)
+        (String(localized: "Graves"), 60, 250),
+        (String(localized: "Médiums"), 250, 2_000),
+        (String(localized: "Aigus"), 2_000, 20_000)
     ]
 
     /// Appelé avec le signal choisi quand l'utilisateur valide.
@@ -109,8 +109,8 @@ struct TestSignalView: View {
 
     private var sweepSection: some View {
         Section {
-            LogFrequencySlider(title: "Départ", value: $sweepStart)
-            LogFrequencySlider(title: "Arrivée", value: $sweepEnd)
+            LogFrequencySlider(title: String(localized: "Départ"), value: $sweepStart)
+            LogFrequencySlider(title: String(localized: "Arrivée"), value: $sweepEnd)
             Stepper("Durée : \(Int(sweepDuration)) s", value: $sweepDuration, in: 2...60, step: 1)
         } footer: {
             Text("La fréquence monte en continu du départ à l'arrivée, puis le balayage recommence. Chaque octave dure le même temps.")
@@ -129,12 +129,12 @@ struct TestSignalView: View {
                     .frame(maxWidth: .infinity)
                 }
             }
-            LogFrequencySlider(title: "Bas", value: $bandLow)
-            LogFrequencySlider(title: "Haut", value: $bandHigh)
+            LogFrequencySlider(title: String(localized: "Bas"), value: $bandLow)
+            LogFrequencySlider(title: String(localized: "Haut"), value: $bandHigh)
         } footer: {
             Text(isValid
-                 ? "Bruit rose limité à cette plage, pour tester une seule zone de fréquences."
-                 : "La fréquence haute doit être supérieure à la fréquence basse.")
+                 ? String(localized: "Bruit rose limité à cette plage, pour tester une seule zone de fréquences.")
+                 : String(localized: "La fréquence haute doit être supérieure à la fréquence basse."))
         }
     }
 
@@ -291,13 +291,13 @@ struct ExpectedSpectrumSketch: View {
     private var accessibilityDescription: String {
         switch signal {
         case .noise:
-            return "Énergie sur toute la plage audible"
+            return String(localized: "Énergie sur toute la plage audible")
         case let .sweep(start, end, _):
-            return "Énergie de \(FrequencyFormat.label(start)) à \(FrequencyFormat.label(end))"
+            return String(localized: "Énergie de \(FrequencyFormat.label(start)) à \(FrequencyFormat.label(end))")
         case let .bandNoise(low, high):
             return high > low
-                ? "Énergie entre \(FrequencyFormat.label(low)) et \(FrequencyFormat.label(high)), atténuée en dehors"
-                : "Plage invalide"
+                ? String(localized: "Énergie entre \(FrequencyFormat.label(low)) et \(FrequencyFormat.label(high)), atténuée en dehors")
+                : String(localized: "Plage invalide")
         }
     }
 }

@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import os
 
 /// Ce dont le générateur de bruit a besoin pour produire un signal et en publier le spectre.
 /// Sert de point d'injection : les tests peuvent le remplacer par une doublure sans audio.
@@ -28,11 +29,14 @@ nonisolated final class ReferencePlayer: SignalPlaying, @unchecked Sendable {
         case noSignal
 
         var errorDescription: String? {
-            "Aucun signal choisi."
+            String(localized: "Aucun signal choisi.")
         }
     }
 
-    private let engine = AVAudioEngine()
+    private static let logger = Logger(subsystem: "Equalizer", category: "Audio")
+
+    private let shared: SharedAudioEngine
+    private var engine: AVAudioEngine { shared.engine }
     private var noiseNode: AVAudioSourceNode?
     private let calculator = SpectrumBandCalculator()
     /// Protège `isActive`, lu depuis des threads audio.
@@ -56,28 +60,16 @@ nonisolated final class ReferencePlayer: SignalPlaying, @unchecked Sendable {
     /// Appelé sur un thread audio à chaque nouveau bloc de niveaux de bandes.
     var onFrame: (@Sendable (ReferenceFrame) -> Void)?
 
-    private var observers: [NSObjectProtocol] = []
-
-    init() {
-        // Le moteur s'arrête de lui-même quand la sortie change (AirPlay, Bluetooth, casque)
-        // ou après une interruption ; on le relance pour que la lecture ne devienne pas muette.
-        let center = NotificationCenter.default
-        observers.append(center.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil) { [weak self] _ in
-            self?.restartIfNeeded()
-        })
-        #if os(iOS)
-        observers.append(center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: nil) { [weak self] notification in
-            let rawType = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
-            // On ne relance qu'à la fin de l'interruption (appel, alarme…), pas à son début.
-            if rawType == AVAudioSession.InterruptionType.ended.rawValue {
-                self?.restartIfNeeded()
-            }
-        })
-        #endif
+    /// - Parameter audio: moteur partagé avec le micro. Le système arrête et relance ce moteur
+    ///   quand la sortie change (AirPlay, Bluetooth, casque) : le graphe est alors reconstruit.
+    init(audio: SharedAudioEngine) {
+        shared = audio
+        audio.setReconfigureHandler(for: .generator) { [weak self] in
+            self?.rebuildAfterConfigurationChange()
+        }
     }
 
     deinit {
-        observers.forEach { NotificationCenter.default.removeObserver($0) }
         stop()
     }
 
@@ -86,34 +78,44 @@ nonisolated final class ReferencePlayer: SignalPlaying, @unchecked Sendable {
     var outputName: String? {
         #if os(iOS)
         let session = AVAudioSession.sharedInstance()
-        let port = session.currentRoute.outputs.first?.portName ?? "aucune"
-        let volume = Int((session.outputVolume * 100).rounded())
+        let port = session.currentRoute.outputs.first?.portName ?? String(localized: "aucune")
+        // Le pourcentage est formaté ici, et non écrit « % » dans la chaîne localisée : chaque langue
+        // place différemment le signe (« 50 % » en français, « 50% » en anglais).
+        let volume = Double(session.outputVolume).formatted(.percent.precision(.fractionLength(0)))
         let rate = Int(engine.outputNode.outputFormat(forBus: 0).sampleRate)
         let channels = engine.outputNode.outputFormat(forBus: 0).channelCount
-        return "\(port) · volume média \(volume) % · \(rate) Hz · \(channels) can."
+        return String(localized: "\(port) · volume média \(volume) · \(rate) Hz · \(channels) can.")
         #else
         nil
         #endif
     }
 
-    /// Relance le moteur arrêté par le système, si l'utilisateur voulait toujours écouter.
-    private func restartIfNeeded() {
+    /// Appelé par le moteur partagé quand le système l'a arrêté : les formats audio ont pu changer.
+    /// Si le bruit jouait, le graphe est reconstruit avant la relance ; sinon, au prochain `play()`.
+    private func rebuildAfterConfigurationChange() {
         lock.lock()
-        let shouldRun = isActive
+        let wasActive = isActive
         lock.unlock()
-        guard shouldRun, isGraphReady, !engine.isRunning else { return }
-        #if os(iOS)
-        try? AVAudioSession.sharedInstance().setActive(true)
-        #endif
-        _ = try? engine.start()
+        isGraphReady = false
+        guard signal != nil, wasActive else { return }
+        do {
+            try buildGraph()
+            noiseNode?.volume = 1
+        } catch {
+            Self.logger.error("Reconstruction du générateur impossible : \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     /// Utilise un signal de test généré (bruit, balayage, bruit par bande).
     /// Le graphe est reconstruit au prochain `play()`.
     func loadSignal(_ signal: GeneratedSignal, config: SpectrumConfig) {
-        stop()
+        // Le bruit est seulement coupé : la sortie reste ouverte pour que le suivant démarre aussitôt.
+        pause()
         self.signal = signal
+        lock.lock()
         self.config = config
+        pending.removeAll()
+        lock.unlock()
         isGraphReady = false
     }
 
@@ -124,80 +126,128 @@ nonisolated final class ReferencePlayer: SignalPlaying, @unchecked Sendable {
 
         #if os(iOS)
         try MeasurementAudioSession.activate()
+        Self.logger.info("Session activée — \(MeasurementAudioSession.routeDescription(), privacy: .public)")
+        #endif
+        // La sortie est ouverte d'abord, puis la liaison AirPlay renouvelée avec le moteur en marche :
+        // c'est le geste manuel qui débloquait l'enceinte (choisir « iPhone » puis revenir à
+        // l'enceinte). Aucun nœud n'est encore connecté, donc rien ne sort sur l'appareil pendant la
+        // bascule. Si la sortie est déjà ouverte (bruit arrêté depuis peu), rien de tout cela n'est
+        // nécessaire : le bruit reprend aussitôt.
+        //
+        // Quand la sortie est déjà ouverte, on n'y touche surtout pas : la bascule automatique
+        // coupait une liaison qui fonctionnait, et seul un vrai choix de l'enceinte par
+        // l'utilisateur la rétablissait.
+        let wasOutputOpen = shared.isOutputOpen
+        try shared.start(for: .generator)
+        #if os(iOS)
+        if !wasOutputOpen {
+            Self.logger.info("Liaison AirPlay renouvelée (sortie ouverte au lancement du bruit)")
+            MeasurementAudioSession.renewAirPlayRoute()
+            waitForEngineToSettle()
+        }
         #endif
 
-        if !isGraphReady {
-            try buildGraph()
+        // Le changement de sortie a pu invalider le graphe : il est (re)construit sur le moteur relancé.
+        try shared.withExclusiveAccess {
+            if !isGraphReady {
+                try buildGraph()
+            }
         }
-        if !engine.isRunning {
-            try engine.start()
-        }
-
         lock.lock()
         isActive = true
         lock.unlock()
+        noiseNode?.volume = 1
+        Self.logger.info("Moteur du générateur : en marche = \(self.shared.isRunning), graphe prêt = \(self.isGraphReady)")
     }
 
     func pause() {
         lock.lock()
         isActive = false
         lock.unlock()
-        // Le signal est produit par un nœud source, sans lecteur à mettre en pause : on suspend tout le moteur.
-        engine.pause()
+        // Le moteur reste en marche, sortie comprise : on coupe seulement le son du bruit. Refermer la
+        // sortie ici rendait le lancement suivant muet sur une enceinte AirPlay.
+        noiseNode?.volume = 0
+        shared.stop(for: .generator, keepOutputOpen: true)
     }
 
+    /// Arrêt complet : la sortie est refermée aussitôt, contrairement à `pause()`.
     func stop() {
         lock.lock()
         isActive = false
-        lock.unlock()
-        engine.stop()
         pending.removeAll()
+        lock.unlock()
+        noiseNode?.volume = 0
+        shared.stop(for: .generator)
     }
+
+    #if os(iOS)
+    /// Laisse le moteur partagé se relancer après les changements de sortie : le système le stoppe
+    /// et il est relancé depuis un autre thread. Le délai final laisse la liaison AirPlay s'établir.
+    private func waitForEngineToSettle() {
+        let deadline = Date().addingTimeInterval(2)
+        while !shared.isRunning, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        Thread.sleep(forTimeInterval: 0.5)
+    }
+    #endif
 
     // MARK: - Privé
 
     /// Reconstruit le graphe audio (source -> mélangeur principal) et installe le tap d'analyse.
+    /// Le moteur peut déjà tourner (pour le micro) : le nœud est donc ajouté à chaud, ce qu'`AVAudioEngine` permet.
     private func buildGraph() throws {
-        engine.stop()
         engine.mainMixerNode.removeTap(onBus: 0)
         // On détache l'ancien nœud : le signal a pu changer.
         if let noiseNode {
             engine.detach(noiseNode)
             self.noiseNode = nil
         }
-        if let signal {
-            let sampleRate = engine.mainMixerNode.outputFormat(forBus: 0).sampleRate
-            guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1) else {
-                throw PlayerError.noSignal
-            }
-            let generator = SignalGenerator(signal: signal, sampleRate: Float(sampleRate))
-            // Ce bloc est appelé sur le thread de rendu : il ne doit ni allouer ni bloquer.
-            let source = AVAudioSourceNode(format: format) { _, _, frameCount, audioBufferList in
-                let buffers = UnsafeMutableAudioBufferListPointer(audioBufferList)
-                for buffer in buffers {
-                    guard let data = buffer.mData?.assumingMemoryBound(to: Float.self) else { continue }
-                    for frame in 0..<Int(frameCount) {
-                        data[frame] = generator.next()
-                    }
-                }
-                return noErr
-            }
-            engine.attach(source)
-            engine.connect(source, to: engine.mainMixerNode, format: format)
-            noiseNode = source
-        }
+        guard let signal else { throw PlayerError.noSignal }
 
-        calculator.configure(fftSize: config.fftSize)
-        let format = engine.mainMixerNode.outputFormat(forBus: 0)
-        engine.mainMixerNode.installTap(onBus: 0, bufferSize: AVAudioFrameCount(config.fftSize), format: format) { [weak self] buffer, _ in
-            self?.process(buffer, sampleRate: Float(format.sampleRate))
+        let sampleRate = engine.mainMixerNode.outputFormat(forBus: 0).sampleRate
+        guard sampleRate > 0, let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1) else {
+            throw PlayerError.noSignal
         }
-        engine.prepare()
+        let generator = SignalGenerator(signal: signal, sampleRate: Float(sampleRate))
+        // Ce bloc est appelé sur le thread de rendu : il ne doit ni allouer ni bloquer.
+        let source = AVAudioSourceNode(format: format) { _, _, frameCount, audioBufferList in
+            let buffers = UnsafeMutableAudioBufferListPointer(audioBufferList)
+            for buffer in buffers {
+                guard let data = buffer.mData?.assumingMemoryBound(to: Float.self) else { continue }
+                for frame in 0..<Int(frameCount) {
+                    data[frame] = generator.next()
+                }
+            }
+            return noErr
+        }
+        engine.attach(source)
+        engine.connect(source, to: engine.mainMixerNode, format: format)
+        // Muet jusqu'à `play()`.
+        source.volume = 0
+        noiseNode = source
+
+        lock.lock()
+        let fftSize = config.fftSize
+        lock.unlock()
+        calculator.configure(fftSize: fftSize)
+        // Format `nil` : le tap suit toujours le format actuel du mélangeur, même après un changement de sortie.
+        engine.mainMixerNode.installTap(onBus: 0, bufferSize: AVAudioFrameCount(fftSize), format: nil) { [weak self] buffer, _ in
+            self?.process(buffer, sampleRate: Float(buffer.format.sampleRate))
+        }
         isGraphReady = true
     }
 
     /// Mixe en mono et calcule une image par `fftSize` échantillons. S'exécute sur le thread du tap audio.
+    /// Le moteur tournant aussi pour le micro, le tap reçoit des buffers même quand le bruit est
+    /// coupé : ils sont alors ignorés, pour ne pas publier de niveaux ni gaspiller de calcul.
     private func process(_ buffer: AVAudioPCMBuffer, sampleRate: Float) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard isActive else {
+            pending.removeAll(keepingCapacity: true)
+            return
+        }
         guard let channelData = buffer.floatChannelData else { return }
         let frames = Int(buffer.frameLength)
         let channels = Int(buffer.format.channelCount)

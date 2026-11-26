@@ -8,9 +8,9 @@ enum ResponseVerdict {
 
     var label: String {
         switch self {
-        case .lacking: return "Manque"
-        case .balanced: return "Équilibré"
-        case .excess: return "Excès"
+        case .lacking: return String(localized: "Manque")
+        case .balanced: return String(localized: "Équilibré")
+        case .excess: return String(localized: "Excès")
         }
     }
 }
@@ -55,19 +55,25 @@ enum FrequencyResponseAnalysis {
     /// Les écarts compris dans ± cette valeur sont jugés équilibrés, en dB.
     static let tolerance: Float = 3
 
+    /// Les images dont la bande la plus forte est sous ce niveau (dB) sont du silence : elles sont
+    /// exclues des moyennes, sinon les pauses les tireraient vers le bas. Le micro d'un iPhone dans
+    /// une pièce calme lit entre −130 et −165 dB : le seuil se place juste au-dessus de ce plancher.
+    /// Placé à −80 dB, il écartait aussi les sons faibles mais bien audibles.
+    static let silenceThreshold: Float = -135
+
     /// Plage servant à aligner la cible sur la mesure. Les médiums sont choisis car ils
     /// sont peu affectés par la pièce et par la réponse du microphone.
     private static let referenceRange = 250.0..<2_000.0
 
     /// Zones de fréquences évaluées, en hertz. La dernière est ouverte vers l'infini.
     private static let zoneDefinitions: [(name: String, range: Range<Double>)] = [
-        ("Sub-graves", 0..<60),
-        ("Graves", 60..<250),
-        ("Bas-médiums", 250..<500),
-        ("Médiums", 500..<2_000),
-        ("Haut-médiums", 2_000..<4_000),
-        ("Présence", 4_000..<6_000),
-        ("Aigus", 6_000..<Double.infinity)
+        (String(localized: "Sub-graves"), 0..<60),
+        (String(localized: "Graves"), 60..<250),
+        (String(localized: "Bas-médiums"), 250..<500),
+        (String(localized: "Médiums"), 500..<2_000),
+        (String(localized: "Haut-médiums"), 2_000..<4_000),
+        (String(localized: "Présence"), 4_000..<6_000),
+        (String(localized: "Aigus"), 6_000..<Double.infinity)
     ]
 
     /// Calcule l'écart de chaque bande et de chaque zone par rapport à la cible.

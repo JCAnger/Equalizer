@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import os
 
 /// Pilote le générateur de bruit : choix du signal, lecture et niveaux de ce qui est envoyé
 /// aux enceintes. Ces niveaux servent de référence à la courbe du sonomètre et, pendant une
@@ -28,8 +29,13 @@ final class NoiseGenerator {
     /// Nombre d'images incluses dans `averageLevels`.
     private(set) var frameCount = 0
 
-    /// Les images dont la bande la plus forte est sous ce niveau (dB) sont considérées comme du silence.
-    private let silenceThreshold: Float = -80
+    /// Niveau (dB) sous lequel une image est considérée comme du silence et exclue de la moyenne.
+    private let silenceThreshold = FrequencyResponseAnalysis.silenceThreshold
+
+    private static let logger = Logger(subsystem: "Equalizer", category: "Audio")
+
+    /// Vrai une fois le premier niveau du bruit généré consigné dans le journal, pour chaque lecture.
+    @ObservationIgnored private var hasLoggedFrame = false
 
     /// Vrai de la demande de lecture jusqu'à la demande d'arrêt, même si le moteur n'a pas encore démarré.
     private var wantsPlayback = false
@@ -39,7 +45,7 @@ final class NoiseGenerator {
     /// Somme des puissances par bande, dont on tire la moyenne.
     private var powerSums: [Double] = []
 
-    init(settings: SpectrumSettings, player: any SignalPlaying = ReferencePlayer()) {
+    init(settings: SpectrumSettings, player: any SignalPlaying) {
         self.settings = settings
         self.player = player
         // Les images arrivent d'un thread audio : on repasse sur le main actor avant de toucher à l'état.
@@ -70,23 +76,31 @@ final class NoiseGenerator {
 
     /// Lance le signal choisi. Sans effet si aucun signal n'est choisi.
     func play() {
-        guard signal != nil, !wantsPlayback else { return }
+        guard signal != nil, !wantsPlayback else {
+            Self.logger.info("Lecture ignorée : signal choisi = \(self.signal != nil), déjà demandée = \(self.wantsPlayback)")
+            return
+        }
         errorMessage = nil
         wantsPlayback = true
+        hasLoggedFrame = false
+        Self.logger.info("Lecture demandée : \(self.signal?.title ?? "-", privacy: .public)")
         Task {
             do {
                 // L'activation de la session audio peut bloquer : on la sort du thread principal.
                 try await Task.detached { [player] in try player.play() }.value
                 // L'arrêt a pu être demandé pendant l'activation de la session.
                 guard wantsPlayback else {
+                    Self.logger.info("Arrêt demandé pendant le démarrage : lecture suspendue")
                     player.pause()
                     return
                 }
                 isPlaying = true
                 outputName = player.outputName
+                Self.logger.info("Lecture démarrée — \(self.outputName ?? "sortie inconnue", privacy: .public)")
             } catch {
                 wantsPlayback = false
                 errorMessage = error.localizedDescription
+                Self.logger.error("Échec de la lecture : \(error.localizedDescription, privacy: .public)")
             }
         }
     }
@@ -128,6 +142,12 @@ final class NoiseGenerator {
     private func receive(_ frame: ReferenceFrame) {
         // Ignore les images arrivées juste après une pause.
         guard isPlaying else { return }
+
+        // Montre si le moteur produit réellement du signal, indépendamment de la sortie audio.
+        if !hasLoggedFrame {
+            hasLoggedFrame = true
+            Self.logger.info("Premier niveau du bruit généré : bande la plus forte \(frame.bands.max() ?? -.infinity) dB")
+        }
 
         // Les réglages ont pu changer depuis le choix du signal : on aligne les bandes sur les actuels.
         let bands = frame.resampled(

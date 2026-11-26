@@ -13,8 +13,10 @@ final class MeasurementSession {
     }
 
     init(settings: SpectrumSettings) {
-        analyzer = AudioSpectrumAnalyzer(settings: settings)
-        generator = NoiseGenerator(settings: settings)
+        // Un seul moteur audio pour le micro et le bruit : deux moteurs se gênent mutuellement.
+        let audio = SharedAudioEngine()
+        analyzer = AudioSpectrumAnalyzer(settings: settings, audio: audio)
+        generator = NoiseGenerator(settings: settings, player: ReferencePlayer(audio: audio))
     }
 
     /// Ouvre le micro. Les erreurs (accès refusé, pas d'entrée) sont publiées par l'analyseur.
@@ -30,6 +32,8 @@ final class MeasurementSession {
             generator.stopMeasurement()
             generator.pause()
         } else {
+            // Une mesure compare le micro au bruit joué : sans bruit choisi, elle n'a pas de sens.
+            guard generator.signal != nil else { return }
             analyzer.startMeasurement()
             generator.startMeasurement()
             generator.play()

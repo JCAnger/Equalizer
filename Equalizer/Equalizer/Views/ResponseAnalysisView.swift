@@ -39,8 +39,8 @@ struct ResponseAnalysisView: View {
                     controls
                 } footer: {
                     Text(usesReference
-                         ? "Les écarts comparent ce que capte le micro au bruit que le générateur envoie aux enceintes, relativement aux médiums (250 Hz–2 kHz)."
-                         : "Sans référence, les écarts sont relatifs aux médiums (250 Hz–2 kHz) par rapport à un spectre musical typique (−3 dB/octave). Lancez le générateur de bruit pour une comparaison exacte.")
+                         ? String(localized: "Les écarts comparent ce que capte le micro au bruit que le générateur envoie aux enceintes, relativement aux médiums (250 Hz–2 kHz).")
+                         : String(localized: "Sans référence, les écarts sont relatifs aux médiums (250 Hz–2 kHz) par rapport à un spectre musical typique (−3 dB/octave). Lancez le générateur de bruit pour une comparaison exacte."))
                 }
 
                 if let report {
@@ -90,7 +90,9 @@ struct ResponseAnalysisView: View {
     private var controls: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label(
-                generator.isPlaying ? "Référence : \(generator.signal?.title ?? "bruit") en cours" : "Référence : générateur arrêté",
+                generator.isPlaying
+                    ? String(localized: "Référence : \(generator.signal?.title ?? String(localized: "bruit")) en cours")
+                    : String(localized: "Référence : générateur arrêté"),
                 systemImage: generator.isPlaying ? "checkmark.circle.fill" : "speaker.slash"
             )
             .font(.footnote)
@@ -105,8 +107,8 @@ struct ResponseAnalysisView: View {
                     Button("Démarrer la mesure") {
                         session.toggleMeasurement()
                     }
-                    // Sans capture du micro, il n'y aurait rien à mesurer.
-                    .disabled(!analyzer.isRunning)
+                    // Sans micro ouvert ni bruit choisi, il n'y aurait rien à mesurer.
+                    .disabled(!analyzer.isRunning || generator.signal == nil)
                 }
                 Spacer()
                 Button("Réinitialiser", role: .destructive) {
@@ -121,6 +123,10 @@ struct ResponseAnalysisView: View {
                 Text("Le micro n'est pas ouvert. Fermez cette fenêtre et touchez Réessayer.")
                     .font(.footnote)
                     .foregroundStyle(.orange)
+            } else if generator.signal == nil && !isMeasuring {
+                Text("Choisissez d'abord un bruit sur l'écran principal.")
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
             } else {
                 Text(status)
                     .font(.footnote)
@@ -133,10 +139,10 @@ struct ResponseAnalysisView: View {
     private var status: String {
         let count = analyzer.measuredFrameCount
         if analyzer.isMeasuring && count == 0 {
-            return "Mesure en cours… en attente d'un signal audible."
+            return String(localized: "Mesure en cours… en attente d'un signal audible.")
         }
-        let state = analyzer.isMeasuring ? "Mesure en cours" : "Mesure arrêtée"
-        return "\(state) · \(count) analyses micro · \(generator.frameCount) analyses référence"
+        let state = analyzer.isMeasuring ? String(localized: "Mesure en cours") : String(localized: "Mesure arrêtée")
+        return String(localized: "\(state) · \(count) analyses micro · \(generator.frameCount) analyses référence")
     }
 
     /// Couleur associée à un verdict : rouge pour un manque, orange pour un excès, vert si équilibré.
@@ -150,7 +156,10 @@ struct ResponseAnalysisView: View {
 
     private var legend: some View {
         HStack(spacing: 16) {
-            Label(usesReference ? "Attendu (générateur)" : "Attendu (spectre typique)", systemImage: "minus")
+            Label(
+                usesReference ? String(localized: "Attendu (générateur)") : String(localized: "Attendu (spectre typique)"),
+                systemImage: "minus"
+            )
                 .foregroundStyle(.secondary)
             Label("Restitué (micro)", systemImage: "minus")
                 .foregroundStyle(.cyan)

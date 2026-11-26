@@ -1,13 +1,12 @@
 import SwiftUI
 
-/// Panneau de commandes en bas de l'écran, à portée du pouce : cinq boutons ronds de même taille
+/// Panneau de commandes en bas de l'écran, à portée du pouce : cinq touches de verre carrées de même taille
 /// (bruit, sortie AirPlay, mesure, analyse des enceintes, réglages). Le bruit choisi s'affiche sur le graphe.
 struct MeasurementControls: View {
     let session: MeasurementSession
     let onShowAnalysis: () -> Void
     let onShowSettings: () -> Void
 
-    private static let airPlayIconScale: CGFloat = 1.5
 
     @State private var showingGenerator = false
 
@@ -51,9 +50,9 @@ struct MeasurementControls: View {
             Button("Générateur…", systemImage: "slider.horizontal.below.waveform") { showingGenerator = true }
         } label: {
             Image(systemName: "waveform")
-                .font(.title3)
+                .font(.title)
                 .foregroundStyle(.white)
-                .controlCircle(AppTheme.controlNoise)
+                .controlKey(AppTheme.controlNoise)
         }
         .accessibilityLabel("Choisir le bruit")
         .accessibilityValue(generator.signal?.title ?? String(localized: "Aucun"))
@@ -70,11 +69,11 @@ struct MeasurementControls: View {
 
     #if os(iOS)
     private var airPlayButton: some View {
-        // L'icône du sélecteur système est petite et sa taille n'est pas réglable : on l'agrandit.
+        // La taille du glyphe du sélecteur système n'est pas réglable : les autres icônes
+        // (`.title`) sont choisies pour avoir la même taille visuelle.
         AirPlayRoutePicker()
-            .frame(width: ControlCircle.size, height: ControlCircle.size)
-            .scaleEffect(Self.airPlayIconScale)
-            .controlCircle(AppTheme.controlOutput)
+            .frame(width: ControlKey.size, height: ControlKey.size)
+            .controlKey(AppTheme.controlOutput)
             .accessibilityLabel("Sortie audio")
     }
     #endif
@@ -84,25 +83,33 @@ struct MeasurementControls: View {
             session.toggleMeasurement()
         } label: {
             Image(systemName: session.isMeasuring ? "stop.fill" : "play.fill")
-                .font(.title3)
+                .font(.title)
                 .foregroundStyle(.white)
-                .controlCircle(AppTheme.controlMeasure)
+                .controlKey(AppTheme.controlMeasure)
         }
-        .buttonStyle(.plain)
-        // Sans micro ouvert, il n'y aurait rien à mesurer.
-        .disabled(!analyzer.isRunning)
-        .opacity(analyzer.isRunning ? 1 : 0.4)
+        .buttonStyle(ControlKeyButtonStyle())
+        .disabled(!canToggleMeasurement)
+        .opacity(canToggleMeasurement ? 1 : 0.4)
         .accessibilityLabel(session.isMeasuring ? "Arrêter la mesure" : "Mesurer")
+        .accessibilityHint(generator.signal == nil && !session.isMeasuring ? Text("Choisissez d'abord un bruit") : Text(""))
+    }
+
+    /// Sans micro ouvert il n'y aurait rien à mesurer, et sans bruit choisi, rien à comparer : le
+    /// bouton est alors désactivé. Pendant une mesure il reste actif, pour pouvoir l'arrêter même si
+    /// l'on a choisi « Aucun » entre-temps.
+    private var canToggleMeasurement: Bool {
+        guard analyzer.isRunning else { return false }
+        return session.isMeasuring || generator.signal != nil
     }
 
     private func iconButton(_ systemImage: String, color: Color, label: LocalizedStringKey, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.title3)
+                .font(.title)
                 .foregroundStyle(.white)
-                .controlCircle(color)
+                .controlKey(color)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ControlKeyButtonStyle())
         .accessibilityLabel(label)
     }
 
@@ -131,21 +138,51 @@ struct MeasurementControls: View {
     }
 }
 
-// MARK: - Bouton rond
+// MARK: - Touche de verre
 
-private enum ControlCircle {
+private enum ControlKey {
     /// Taille commune à tous les boutons du bas : au-dessus du minimum de 44 points d'une zone tactile.
     static let size: CGFloat = 56
+    /// Coins arrondis des touches, en style `.continuous`.
+    static let cornerRadius: CGFloat = 16
+    /// Échelle à l'appui, pour un retour visuel discret.
+    static let pressedScale: CGFloat = 0.97
+}
+
+/// Enfonce légèrement la touche à l'appui.
+private struct ControlKeyButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? ControlKey.pressedScale : 1)
+            .animation(.smooth(duration: 0.2), value: configuration.isPressed)
+    }
 }
 
 private extension View {
-    /// Habille le contenu en bouton rond plein de la couleur donnée, avec un liseré clair et une ombre douce.
-    func controlCircle(_ color: Color) -> some View {
-        frame(width: ControlCircle.size, height: ControlCircle.size)
-            .background(color, in: .circle)
-            .overlay { Circle().strokeBorder(.white.opacity(0.25), lineWidth: 1) }
-            .shadow(color: .black.opacity(0.25), radius: 6, y: 3)
-            .contentShape(.circle)
+    /// Habille le contenu en touche de verre teinté : carré arrondi, reflet en haut et ombre douce.
+    /// Avant iOS 26, le verre est imité par un dégradé de la teinte avec un reflet.
+    @ViewBuilder
+    func controlKey(_ color: Color) -> some View {
+        let shape = RoundedRectangle(cornerRadius: ControlKey.cornerRadius, style: .continuous)
+        if #available(iOS 26.0, macCatalyst 26.0, macOS 26.0, visionOS 26.0, *) {
+            frame(width: ControlKey.size, height: ControlKey.size)
+                .glassEffect(.regular.tint(color.opacity(0.75)), in: shape)
+                .contentShape(shape)
+        } else {
+            frame(width: ControlKey.size, height: ControlKey.size)
+                .background {
+                    shape.fill(LinearGradient(colors: [color.opacity(0.95), color.opacity(0.7)], startPoint: .top, endPoint: .bottom))
+                }
+                .overlay(alignment: .top) {
+                    // Reflet : une lueur claire qui s'estompe vers le milieu de la touche.
+                    shape
+                        .fill(LinearGradient(colors: [.white.opacity(0.45), .clear], startPoint: .top, endPoint: .center))
+                        .padding(2)
+                }
+                .overlay { shape.strokeBorder(.white.opacity(0.3), lineWidth: 1) }
+                .shadow(color: .black.opacity(0.25), radius: 6, y: 3)
+                .contentShape(shape)
+        }
     }
 }
 

@@ -1,6 +1,7 @@
 import AVFoundation
 import Accelerate
 import Observation
+import os
 
 /// Capture le son du microphone et produit un spectre à échelle logarithmique,
 /// réparti en bandes selon les `SpectrumSettings` modifiables.
@@ -22,23 +23,36 @@ final class AudioSpectrumAnalyzer {
 
     // MARK: - Propriétés internes
 
-    /// Les images dont la bande la plus forte est sous ce niveau (dB) sont considérées comme
-    /// du silence et exclues de la moyenne, sinon les pauses tireraient le résultat vers le bas.
-    private let silenceThreshold: Float = -80
+    /// Niveau (dB) sous lequel une image est considérée comme du silence et exclue de la moyenne.
+    private let silenceThreshold = FrequencyResponseAnalysis.silenceThreshold
 
     /// Somme des puissances par bande, dont on tire la moyenne.
     private var powerSums: [Double] = []
 
     // Lu depuis le thread du tap audio : voir la note sur les accès concurrents dans `SpectrumSettings`.
     nonisolated(unsafe) private let settings: SpectrumSettings
-    private let engine = AVAudioEngine()
+    /// Moteur partagé avec le générateur de bruit : voir `SharedAudioEngine`.
+    nonisolated private let audio: SharedAudioEngine
+    private var engine: AVAudioEngine { audio.engine }
 
     // Configuré sur le main actor uniquement quand le tap n'est pas installé (avant le
     // démarrage ou après l'arrêt), puis utilisé depuis le thread audio temps réel pendant l'exécution.
     private let calculator = SpectrumBandCalculator()
 
-    init(settings: SpectrumSettings) {
+    private static let logger = Logger(subsystem: "Equalizer", category: "Audio")
+
+    /// Instant du dernier niveau consigné dans le journal pendant une mesure : un relevé toutes les
+    /// deux secondes suffit à voir si le micro entend le bruit, sans inonder la console.
+    @ObservationIgnored private var lastLevelLog = Date.distantPast
+
+    init(settings: SpectrumSettings, audio: SharedAudioEngine) {
         self.settings = settings
+        self.audio = audio
+        // Quand le système arrête le moteur (changement de sortie AirPlay ou Bluetooth…), le format
+        // de l'entrée a pu changer : le tap est réinstallé avant la relance.
+        audio.setReconfigureHandler(for: .microphone) { [weak self] in
+            self?.installTap()
+        }
     }
 
     // MARK: - Cycle de vie de la capture
@@ -51,9 +65,10 @@ final class AudioSpectrumAnalyzer {
 
         Task {
             let granted = await AVAudioApplication.requestRecordPermission()
+            Self.logger.info("Autorisation du micro : \(granted)")
             guard granted else {
                 await MainActor.run {
-                    self.errorMessage = "L'accès au microphone a été refusé. Autorisez-le dans Réglages."
+                    self.errorMessage = String(localized: "L'accès au microphone a été refusé. Autorisez-le dans Réglages.")
                 }
                 return
             }
@@ -77,7 +92,8 @@ final class AudioSpectrumAnalyzer {
     func stop() {
         guard isRunning else { return }
         engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
+        // Le moteur ne s'arrête que si le générateur de bruit n'en a pas besoin non plus.
+        audio.stop(for: .microphone)
         isRunning = false
         isMeasuring = false
     }
@@ -87,6 +103,7 @@ final class AudioSpectrumAnalyzer {
     /// Lance une nouvelle mesure : fait la moyenne de la musique captée à partir de maintenant.
     func startMeasurement() {
         resetMeasurement()
+        lastLevelLog = .distantPast
         isMeasuring = true
     }
 
@@ -104,7 +121,14 @@ final class AudioSpectrumAnalyzer {
     /// forts pèsent correctement dans la moyenne (une moyenne directe de dB les sous-estimerait).
     @MainActor
     private func accumulate(_ newBands: [Float]) {
-        guard isMeasuring, let loudest = newBands.max(), loudest > silenceThreshold else { return }
+        guard isMeasuring, let loudest = newBands.max() else { return }
+        // Montre si le micro entend quelque chose au-dessus du seuil de silence.
+        let now = Date()
+        if now.timeIntervalSince(lastLevelLog) >= 2 {
+            lastLevelLog = now
+            Self.logger.info("Niveau du micro pendant la mesure : bande la plus forte \(loudest) dB, seuil de silence \(self.silenceThreshold) dB")
+        }
+        guard loudest > silenceThreshold else { return }
         // Si le nombre de bandes a changé en cours de mesure, les anciennes sommes sont inutilisables.
         if powerSums.count != newBands.count {
             powerSums = [Double](repeating: 0, count: newBands.count)
@@ -127,7 +151,7 @@ final class AudioSpectrumAnalyzer {
         // La session est configurée et activée dans `start()`, hors du thread principal.
         let session = AVAudioSession.sharedInstance()
         guard !session.currentRoute.inputs.isEmpty, session.isInputAvailable else {
-            errorMessage = "Aucun périphérique d'entrée audio disponible."
+            errorMessage = String(localized: "Aucun périphérique d'entrée audio disponible.")
             return
         }
         #endif
@@ -138,25 +162,38 @@ final class AudioSpectrumAnalyzer {
         let input = engine.inputNode
         let format = input.inputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else {
-            errorMessage = "Aucun périphérique d'entrée audio disponible."
+            errorMessage = String(localized: "Aucun périphérique d'entrée audio disponible.")
             return
         }
 
-        engine.prepare()
+        installTap()
 
-        calculator.configure(fftSize: settings.fftSize)
+        do {
+            try audio.start(for: .microphone)
+            isRunning = true
+            #if os(iOS)
+            Self.logger.info("Micro démarré — \(MeasurementAudioSession.routeDescription(), privacy: .public)")
+            #endif
+        } catch {
+            input.removeTap(onBus: 0)
+            errorMessage = error.localizedDescription
+            Self.logger.error("Démarrage du micro impossible : \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Installe (ou réinstalle) le tap d'analyse sur l'entrée du moteur. Aussi appelé par le moteur
+    /// partagé quand le système a changé la configuration audio, depuis un autre thread.
+    nonisolated private func installTap() {
+        let input = audio.engine.inputNode
+        // Sans entrée valide, installer un tap lèverait une exception : on ne le fait pas.
+        guard input.inputFormat(forBus: 0).sampleRate > 0 else { return }
 
         // On retire un éventuel tap résiduel : en installer deux sur le même bus est une erreur fatale.
         input.removeTap(onBus: 0)
-        input.installTap(onBus: 0, bufferSize: UInt32(settings.fftSize), format: format) { [weak self] buffer, _ in
-            self?.process(buffer: buffer, sampleRate: Float(format.sampleRate))
-        }
-
-        do {
-            try engine.start()
-            isRunning = true
-        } catch {
-            errorMessage = error.localizedDescription
+        calculator.configure(fftSize: settings.fftSize)
+        // Format `nil` : le tap suit toujours le format actuel de l'entrée, même après un changement de sortie.
+        input.installTap(onBus: 0, bufferSize: UInt32(settings.fftSize), format: nil) { [weak self] buffer, _ in
+            self?.process(buffer: buffer, sampleRate: Float(buffer.format.sampleRate))
         }
     }
 

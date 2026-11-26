@@ -25,7 +25,8 @@ struct ContentView: View {
                     onShowSettings: { showingSettings = true }
                 )
                 .padding(.horizontal, 16)
-                .padding(.bottom, 8)
+                // Descend les touches de 8 pt dans la zone sûre, près de l'indicateur d'accueil.
+                .padding(.bottom, -8)
             }
         }
         // Posée sur le conteneur et non sur le graphe, qui déborde sous la barre d'état :
@@ -64,7 +65,8 @@ struct ContentView: View {
             VStack(spacing: 8) {
                 #if os(iOS)
                 if generator.isPlaying {
-                    banner("Sortie actuelle : \(generator.outputName ?? "aucune")", color: .orange)
+                    let outputName = generator.outputName ?? String(localized: "aucune")
+                    banner(String(localized: "Sortie : \(outputName)"), color: .orange)
                         .transition(.opacity)
                 }
                 #endif
