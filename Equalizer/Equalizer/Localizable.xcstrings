@@ -192,8 +192,8 @@
         },
         "zh-Hans" : {
           "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "起音：%@"
+            "state" : "machine_translated",
+            "value" : "上升速度：%@"
           }
         }
       }
@@ -760,8 +760,8 @@
         },
         "zh-Hans" : {
           "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "发生器"
+            "state" : "machine_translated",
+            "value" : "信号发生器"
           }
         }
       }
@@ -776,8 +776,8 @@
         },
         "zh-Hans" : {
           "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "发生器…"
+            "state" : "machine_translated",
+            "value" : "信号发生器…"
           }
         }
       }
@@ -1178,8 +1178,8 @@
         },
         "zh-Hans" : {
           "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "存在感"
+            "state" : "machine_translated",
+            "value" : "临场感"
           }
         }
       }
@@ -1306,8 +1306,8 @@
         },
         "zh-Hans" : {
           "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "释音：%@"
+            "state" : "machine_translated",
+            "value" : "下降速度：%@"
           }
         }
       }
