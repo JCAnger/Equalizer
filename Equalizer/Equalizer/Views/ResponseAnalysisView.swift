@@ -3,25 +3,27 @@ import SwiftUI
 /// Montre quelles zones de fréquences les enceintes (et la pièce) atténuent ou exagèrent,
 /// d'après la moyenne à long terme de la musique captée par le microphone.
 struct ResponseAnalysisView: View {
-    let analyzer: AudioSpectrumAnalyzer
-    let reference: ReferenceReceiver
+    let session: MeasurementSession
     let settings: SpectrumSettings
+
+    private var analyzer: AudioSpectrumAnalyzer { session.analyzer }
+    private var generator: NoiseGenerator { session.generator }
 
     @Environment(\.dismiss) private var dismiss
 
     /// Étendue (dB) des graphiques de part et d'autre de la courbe attendue ou de l'axe zéro.
     private let displayRange: Float = 12
 
-    /// La référence n'est utilisée que si la source a envoyé de l'audio pendant la mesure.
+    /// La référence n'est utilisée que si le générateur a joué du bruit pendant la mesure.
     private var usesReference: Bool {
-        reference.frameCount > 0
+        generator.frameCount > 0
     }
 
     /// Rapport recalculé à chaque évaluation de la vue : le calcul est léger (quelques dizaines de bandes).
     private var report: FrequencyResponseReport? {
         FrequencyResponseAnalysis.report(
             averageLevels: analyzer.averageBandLevels,
-            referenceLevels: usesReference ? reference.averageLevels : nil,
+            referenceLevels: usesReference ? generator.averageLevels : nil,
             settings: settings
         )
     }
@@ -37,8 +39,8 @@ struct ResponseAnalysisView: View {
                     controls
                 } footer: {
                     Text(usesReference
-                         ? "Les écarts comparent ce que capte le micro à ce que la source envoie aux enceintes, relativement aux médiums (250 Hz–2 kHz)."
-                         : "Sans référence, les écarts sont relatifs aux médiums (250 Hz–2 kHz) par rapport à un spectre musical typique (−3 dB/octave). Démarrez la source (Mac ou autre iPhone/iPad) pour une comparaison exacte.")
+                         ? "Les écarts comparent ce que capte le micro au bruit que le générateur envoie aux enceintes, relativement aux médiums (250 Hz–2 kHz)."
+                         : "Sans référence, les écarts sont relatifs aux médiums (250 Hz–2 kHz) par rapport à un spectre musical typique (−3 dB/octave). Lancez le générateur de bruit pour une comparaison exacte.")
                 }
 
                 if let report {
@@ -84,26 +86,24 @@ struct ResponseAnalysisView: View {
         }
     }
 
-    /// État de la connexion à la source et boutons de pilotage de la mesure.
+    /// État du générateur et boutons de pilotage de la mesure.
     private var controls: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label(
-                reference.isConnected ? "Référence : \(reference.sourceName ?? "source") connectée" : "Référence : recherche de la source…",
-                systemImage: reference.isConnected ? "checkmark.circle.fill" : "magnifyingglass"
+                generator.isPlaying ? "Référence : \(generator.signal?.title ?? "bruit") en cours" : "Référence : générateur arrêté",
+                systemImage: generator.isPlaying ? "checkmark.circle.fill" : "speaker.slash"
             )
             .font(.footnote)
-            .foregroundStyle(reference.isConnected ? .green : .secondary)
+            .foregroundStyle(generator.isPlaying ? .green : .secondary)
 
             HStack {
                 if isMeasuring {
                     Button("Arrêter la mesure") {
-                        analyzer.stopMeasurement()
-                        reference.stopMeasurement()
+                        session.toggleMeasurement()
                     }
                 } else {
                     Button("Démarrer la mesure") {
-                        analyzer.startMeasurement()
-                        reference.startMeasurement()
+                        session.toggleMeasurement()
                     }
                     // Sans capture du micro, il n'y aurait rien à mesurer.
                     .disabled(!analyzer.isRunning)
@@ -111,14 +111,14 @@ struct ResponseAnalysisView: View {
                 Spacer()
                 Button("Réinitialiser", role: .destructive) {
                     analyzer.resetMeasurement()
-                    reference.resetMeasurement()
+                    generator.resetMeasurement()
                 }
                 .disabled(analyzer.measuredFrameCount == 0)
             }
             .buttonStyle(.bordered)
 
             if !analyzer.isRunning {
-                Text("Démarrez d'abord la capture du micro.")
+                Text("Le micro n'est pas ouvert. Fermez cette fenêtre et touchez Réessayer.")
                     .font(.footnote)
                     .foregroundStyle(.orange)
             } else {
@@ -136,7 +136,7 @@ struct ResponseAnalysisView: View {
             return "Mesure en cours… en attente d'un signal audible."
         }
         let state = analyzer.isMeasuring ? "Mesure en cours" : "Mesure arrêtée"
-        return "\(state) · \(count) analyses micro · \(reference.frameCount) analyses référence"
+        return "\(state) · \(count) analyses micro · \(generator.frameCount) analyses référence"
     }
 
     /// Couleur associée à un verdict : rouge pour un manque, orange pour un excès, vert si équilibré.
@@ -150,7 +150,7 @@ struct ResponseAnalysisView: View {
 
     private var legend: some View {
         HStack(spacing: 16) {
-            Label(usesReference ? "Attendu (source)" : "Attendu (spectre typique)", systemImage: "minus")
+            Label(usesReference ? "Attendu (générateur)" : "Attendu (spectre typique)", systemImage: "minus")
                 .foregroundStyle(.secondary)
             Label("Restitué (micro)", systemImage: "minus")
                 .foregroundStyle(.cyan)

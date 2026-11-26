@@ -1,95 +1,98 @@
 import SwiftUI
 
-/// Écran de mesure : affiche le spectre capté par le microphone, avec la référence de la
-/// source en superposition, et donne accès aux réglages et à l'analyse des enceintes.
+/// Écran principal : le spectre capté par le micro (ouvert dès le lancement) avec, derrière,
+/// le bruit généré. Les commandes sont regroupées dans un panneau en bas, à portée du pouce.
 struct ContentView: View {
     @State private var settings = SpectrumSettings()
-    // Créés dans `onAppear` : ils dépendent de `settings`, qui n'existe pas encore à l'initialisation des propriétés.
-    @State private var analyzer: AudioSpectrumAnalyzer?
-    @State private var reference: ReferenceReceiver?
+    // Créée dans `onAppear` : elle dépend de `settings`, qui n'existe pas encore à l'initialisation des propriétés.
+    @State private var session: MeasurementSession?
     @State private var showingSettings = false
     @State private var showingAnalysis = false
 
     var body: some View {
-        SpectrumView(
-            levels: analyzer?.bandLevels ?? [],
-            referenceLevels: reference?.liveLevels ?? [],
-            settings: settings
-        )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .ignoresSafeArea()
-            .overlay(alignment: .topLeading) {
-                Button(analyzer?.isRunning == true ? "Arrêter" : "Démarrer") {
-                    toggleCapture()
-                }
-                .glassProminentButtonStyle()
-                .controlSize(.large)
-                .padding(.leading, 44)
-                .padding(.top, 8)
+        VStack(spacing: 0) {
+            SpectrumView(
+                levels: session?.analyzer.bandLevels ?? [],
+                referenceLevels: session?.generator.liveLevels ?? [],
+                settings: settings
+            )
+            .ignoresSafeArea(edges: .top)
+
+            if let session {
+                MeasurementControls(
+                    session: session,
+                    onShowAnalysis: { showingAnalysis = true },
+                    onShowSettings: { showingSettings = true }
+                )
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
             }
-            .overlay(alignment: .topTrailing) {
-                HStack {
-                    Button {
-                        showingAnalysis = true
-                    } label: {
-                        Image(systemName: "waveform.badge.magnifyingglass")
-                    }
-                    Button {
-                        showingSettings = true
-                    } label: {
-                        Image(systemName: "slider.horizontal.3")
-                    }
-                }
-                .glassButtonStyle()
-                .controlSize(.large)
-                .padding(.trailing, 8)
-                .padding(.top, 8)
+        }
+        // Posée sur le conteneur et non sur le graphe, qui déborde sous la barre d'état :
+        // la ligne reste ainsi dans la zone sûre, sous l'îlot dynamique.
+        .overlay(alignment: .top) { infoBanners }
+        .animation(AppTheme.fade, value: session?.generator.isPlaying)
+        // Même fond sombre que le graphe, y compris derrière les commandes.
+        .background { AppBackground().environment(\.colorScheme, .dark) }
+        .sheet(isPresented: $showingSettings) {
+            SettingsView(settings: settings)
+        }
+        .sheet(isPresented: $showingAnalysis) {
+            if let session {
+                ResponseAnalysisView(session: session, settings: settings)
             }
-            .overlay(alignment: .bottom) {
-                if let message = analyzer?.errorMessage {
-                    Text(message)
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .glassSurface(in: .capsule)
-                        .multilineTextAlignment(.center)
-                        .padding(.bottom, 8)
-                }
+        }
+        .onAppear {
+            // Ne crée la session et n'ouvre le micro qu'une fois : `onAppear` peut être rappelé
+            // (retour d'une feuille, etc.).
+            if session == nil {
+                let newSession = MeasurementSession(settings: settings)
+                session = newSession
+                newSession.startListening()
             }
-            .sheet(isPresented: $showingSettings) {
-                SettingsView(settings: settings)
-            }
-            .sheet(isPresented: $showingAnalysis) {
-                if let analyzer, let reference {
-                    ResponseAnalysisView(analyzer: analyzer, reference: reference, settings: settings)
-                }
-            }
-            .onAppear {
-                // Ne crée l'analyseur qu'une fois : `onAppear` peut être rappelé (retour d'une feuille, etc.).
-                if analyzer == nil {
-                    analyzer = AudioSpectrumAnalyzer(settings: settings)
-                    reference = ReferenceReceiver(settings: settings)
-                }
-                reference?.startBrowsing()
-            }
-            .onDisappear {
-                analyzer?.stop()
-                reference?.stopBrowsing()
-            }
+        }
+        .onDisappear {
+            session?.shutDown()
+        }
     }
 
-    /// Démarre ou arrête la capture du microphone selon l'état courant.
-    private func toggleCapture() {
-        guard let analyzer else { return }
-        if analyzer.isRunning {
-            analyzer.stop()
-        } else {
-            analyzer.start()
+    /// Pastilles posées sur le graphe : la sortie audio utilisée (tant que le bruit joue, pour
+    /// repérer un silence dû à une mauvaise sortie), puis le bruit choisi.
+    @ViewBuilder
+    private var infoBanners: some View {
+        if let generator = session?.generator {
+            VStack(spacing: 8) {
+                #if os(iOS)
+                if generator.isPlaying {
+                    banner("Sortie actuelle : \(generator.outputName ?? "aucune")", color: .orange)
+                        .transition(.opacity)
+                }
+                #endif
+                banner(generator.signal?.title ?? String(localized: "Aucun bruit"), color: .white)
+            }
+            .padding(.top, 8)
+            .padding(.horizontal, 16)
         }
+    }
+
+    private func banner(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(.footnote)
+            .foregroundStyle(color)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .glassSurface(in: .capsule)
+            // Le verre est posé sur le graphe, toujours sombre : on garde l'apparence sombre en mode clair.
+            .environment(\.colorScheme, .dark)
     }
 }
 
-#Preview {
+#Preview("Clair") {
     ContentView()
+}
+
+#Preview("Sombre") {
+    ContentView()
+        .preferredColorScheme(.dark)
 }

@@ -5,7 +5,7 @@ import SwiftUI
 struct SpectrumView: View {
     /// Niveaux (dB) du microphone, une valeur par bande.
     let levels: [Float]
-    /// Niveaux en direct de la source musicale, dessinés en pointillés par-dessus ceux du microphone.
+    /// Niveaux en direct du bruit généré, dessinés en pointillés derrière ceux du microphone.
     var referenceLevels: [Float] = []
     let settings: SpectrumSettings
 
@@ -19,16 +19,16 @@ struct SpectrumView: View {
     var body: some View {
         VStack(spacing: 4) {
             Canvas { context, size in
-                // Ordre de dessin : grille au fond, niveaux, référence, puis graduations
-                // par-dessus pour qu'elles restent visibles.
+                // Ordre de dessin : grille au fond, référence, niveaux du micro par-dessus,
+                // puis graduations pour qu'elles restent visibles.
                 drawGrid(context: context, size: size)
+                drawReference(context: context, size: size)
                 switch settings.displayStyle {
                 case .bars:
                     drawBars(context: context, size: size)
                 case .curve:
                     drawCurve(context: context, size: size)
                 }
-                drawReference(context: context, size: size)
                 drawDecibelLabels(context: context, size: size)
             }
             .background(
@@ -204,7 +204,7 @@ struct SpectrumView: View {
         )
     }
 
-    /// Dessine ce que joue la source sous forme de ligne en pointillés. Les niveaux de la source
+    /// Dessine le bruit généré sous forme de ligne en pointillés. Les niveaux du générateur
     /// et du microphone ne sont pas comparables en valeur absolue : la référence est donc décalée
     /// pour coïncider avec le microphone sur les médiums (250 Hz–2 kHz), comme dans l'analyse.
     private func drawReference(context: GraphicsContext, size: CGSize) {

@@ -1,37 +1,47 @@
 import AVFoundation
 import Foundation
 
-/// Lit un fichier audio (en boucle) et convertit exactement ce qui est envoyé aux enceintes
-/// en niveaux de bandes, avec le même calculateur que l'analyse du microphone.
+/// Ce dont le générateur de bruit a besoin pour produire un signal et en publier le spectre.
+/// Sert de point d'injection : les tests peuvent le remplacer par une doublure sans audio.
+nonisolated protocol SignalPlaying: AnyObject, Sendable {
+    /// Appelé sur un thread audio à chaque nouveau bloc de niveaux de bandes.
+    var onFrame: (@Sendable (ReferenceFrame) -> Void)? { get set }
+    /// Description de la sortie actuelle, `nil` si elle n'est pas connue.
+    var outputName: String? { get }
+
+    func loadSignal(_ signal: GeneratedSignal, config: SpectrumConfig)
+    func play() throws
+    func pause()
+    func stop()
+}
+
+/// Joue un signal de test généré (bruit, balayage…) et convertit exactement ce qui est envoyé
+/// aux enceintes en niveaux de bandes, avec le même calculateur que l'analyse du microphone.
 ///
 /// Les niveaux sont pris à la sortie du mélangeur principal : les changements de volume faits
 /// sur l'appareil lui-même n'ont donc pas d'importance, seule la forme du spectre est comparée.
 ///
 /// Les rappels audio arrivent sur des threads audio : ce type n'est donc volontairement
 /// pas isolé au main actor.
-nonisolated final class ReferencePlayer: @unchecked Sendable {
+nonisolated final class ReferencePlayer: SignalPlaying, @unchecked Sendable {
     enum PlayerError: LocalizedError {
-        case noFile
+        case noSignal
 
         var errorDescription: String? {
-            "Aucun morceau choisi."
+            "Aucun signal choisi."
         }
     }
 
     private let engine = AVAudioEngine()
-    private let node = AVAudioPlayerNode()
     private var noiseNode: AVAudioSourceNode?
     private let calculator = SpectrumBandCalculator()
-    /// Protège `isActive` et `wantsPlayback`, lus depuis des threads audio.
+    /// Protège `isActive`, lu depuis des threads audio.
     private let lock = NSLock()
 
-    private var file: AVAudioFile?
-    /// Signal généré joué à la place d'un fichier (bruit, balayage…), `nil` pour un fichier.
+    /// Signal à jouer (bruit, balayage…), `nil` tant qu'aucun n'est chargé.
     private var signal: GeneratedSignal?
     /// Faux tant que le graphe audio n'a pas été (re)construit après un chargement.
     private var isGraphReady = false
-    private var isScheduled = false
-    private var wantsPlayback = false
     /// Vrai entre `play()` et `pause()`/`stop()` ; protégé par `lock`.
     private var isActive = false
 
@@ -95,39 +105,25 @@ nonisolated final class ReferencePlayer: @unchecked Sendable {
         #if os(iOS)
         try? AVAudioSession.sharedInstance().setActive(true)
         #endif
-        guard (try? engine.start()) != nil else { return }
-        // Le signal généré est joué par son propre nœud source : seul le lecteur de fichier a besoin de `play()`.
-        if signal == nil { node.play() }
+        _ = try? engine.start()
     }
 
-    /// Charge un fichier audio. Le graphe est reconstruit au prochain `play()`.
-    /// - Throws: l'erreur d'`AVAudioFile` si le fichier est illisible.
-    func load(_ url: URL, config: SpectrumConfig) throws {
-        stop()
-        file = try AVAudioFile(forReading: url)
-        signal = nil
-        self.config = config
-        isGraphReady = false
-    }
-
-    /// Utilise un signal de test généré (bruit, balayage, bruit par bande) à la place d'un fichier.
+    /// Utilise un signal de test généré (bruit, balayage, bruit par bande).
+    /// Le graphe est reconstruit au prochain `play()`.
     func loadSignal(_ signal: GeneratedSignal, config: SpectrumConfig) {
         stop()
-        file = nil
         self.signal = signal
         self.config = config
         isGraphReady = false
     }
 
     /// Démarre (ou reprend) la lecture.
-    /// - Throws: `PlayerError.noFile` si rien n'est chargé, ou l'erreur de la session / du moteur.
+    /// - Throws: `PlayerError.noSignal` si rien n'est chargé, ou l'erreur de la session / du moteur.
     func play() throws {
-        guard signal != nil || file != nil else { throw PlayerError.noFile }
+        guard signal != nil else { throw PlayerError.noSignal }
 
         #if os(iOS)
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playback)
-        try session.setActive(true)
+        try MeasurementAudioSession.activate()
         #endif
 
         if !isGraphReady {
@@ -140,40 +136,21 @@ nonisolated final class ReferencePlayer: @unchecked Sendable {
         lock.lock()
         isActive = true
         lock.unlock()
-
-        // Le signal est produit en continu par le moteur : pas de fichier à planifier.
-        guard signal == nil else { return }
-        setWantsPlayback(true)
-        if !isScheduled {
-            isScheduled = true
-            scheduleFile()
-        }
-        node.play()
     }
 
     func pause() {
         lock.lock()
         isActive = false
         lock.unlock()
-        if signal != nil {
-            // Le générateur de signal n'a pas de nœud lecteur à mettre en pause : on suspend tout le moteur.
-            engine.pause()
-        } else {
-            node.pause()
-        }
+        // Le signal est produit par un nœud source, sans lecteur à mettre en pause : on suspend tout le moteur.
+        engine.pause()
     }
 
     func stop() {
         lock.lock()
         isActive = false
         lock.unlock()
-        // Empêche la fin du fichier en cours de relancer une boucle après l'arrêt.
-        setWantsPlayback(false)
-        if node.engine != nil {
-            node.stop()
-        }
         engine.stop()
-        isScheduled = false
         pending.removeAll()
     }
 
@@ -183,10 +160,7 @@ nonisolated final class ReferencePlayer: @unchecked Sendable {
     private func buildGraph() throws {
         engine.stop()
         engine.mainMixerNode.removeTap(onBus: 0)
-        // On détache les anciens nœuds : le type de source a pu changer (fichier <-> bruit).
-        if node.engine != nil {
-            engine.detach(node)
-        }
+        // On détache l'ancien nœud : le signal a pu changer.
         if let noiseNode {
             engine.detach(noiseNode)
             self.noiseNode = nil
@@ -194,7 +168,7 @@ nonisolated final class ReferencePlayer: @unchecked Sendable {
         if let signal {
             let sampleRate = engine.mainMixerNode.outputFormat(forBus: 0).sampleRate
             guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1) else {
-                throw PlayerError.noFile
+                throw PlayerError.noSignal
             }
             let generator = SignalGenerator(signal: signal, sampleRate: Float(sampleRate))
             // Ce bloc est appelé sur le thread de rendu : il ne doit ni allouer ni bloquer.
@@ -211,9 +185,6 @@ nonisolated final class ReferencePlayer: @unchecked Sendable {
             engine.attach(source)
             engine.connect(source, to: engine.mainMixerNode, format: format)
             noiseNode = source
-        } else if let file {
-            engine.attach(node)
-            engine.connect(node, to: engine.mainMixerNode, format: file.processingFormat)
         }
 
         calculator.configure(fftSize: config.fftSize)
@@ -223,29 +194,6 @@ nonisolated final class ReferencePlayer: @unchecked Sendable {
         }
         engine.prepare()
         isGraphReady = true
-    }
-
-    /// Joue le fichier et, à sa fin, le relance tant que la lecture n'est pas arrêtée.
-    private func scheduleFile() {
-        guard let file else { return }
-        file.framePosition = 0
-        // `.dataPlayedBack` : le rappel n'a lieu qu'une fois le son réellement joué, pas seulement lu.
-        node.scheduleFile(file, at: nil, completionCallbackType: .dataPlayedBack) { [weak self] _ in
-            guard let self, self.currentWantsPlayback() else { return }
-            self.scheduleFile()
-        }
-    }
-
-    private func setWantsPlayback(_ value: Bool) {
-        lock.lock()
-        wantsPlayback = value
-        lock.unlock()
-    }
-
-    private func currentWantsPlayback() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return wantsPlayback
     }
 
     /// Mixe en mono et calcule une image par `fftSize` échantillons. S'exécute sur le thread du tap audio.
@@ -283,7 +231,7 @@ nonisolated enum NoiseColor: Equatable, Sendable {
     case white
 }
 
-/// Signaux de test que le lecteur sait produire lui-même.
+/// Signaux de test que le générateur sait produire.
 nonisolated enum GeneratedSignal: Equatable, Sendable {
     case noise(NoiseColor)
     /// Sinus dont la fréquence monte de façon logarithmique de `startFrequency` à

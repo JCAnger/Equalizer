@@ -1,15 +1,29 @@
 import SwiftUI
 
 @main struct MyApp: App {
+    #if !os(macOS)
+    @State private var isSplashVisible = true
+    #endif
+
     var body: some Scene {
         WindowGroup {
             #if os(macOS)
-            // Le Mac joue la musique et sert de source de référence.
-            ReferenceSourceView()
+            ContentView()
                 .tint(AppTheme.accent)
             #else
-            RootView()
-                .tint(AppTheme.accent)
+            ZStack {
+                ContentView()
+                if isSplashVisible {
+                    SplashView()
+                        .transition(.opacity)
+                }
+            }
+            .tint(AppTheme.accent)
+            .task {
+                // Une annulation (scène fermée) interrompt simplement l'attente.
+                try? await Task.sleep(for: SplashView.displayDuration)
+                withAnimation(AppTheme.fade) { isSplashVisible = false }
+            }
             #endif
         }
     }
