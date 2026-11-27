@@ -37,10 +37,12 @@ struct ContentView: View {
         .background { AppBackground().environment(\.colorScheme, .dark) }
         .sheet(isPresented: $showingSettings) {
             SettingsView(settings: settings)
+                .tallSheetSizing()
         }
         .sheet(isPresented: $showingAnalysis) {
             if let session {
                 ResponseAnalysisView(session: session, settings: settings)
+                    .tallSheetSizing()
             }
         }
         .onAppear {

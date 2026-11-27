@@ -136,7 +136,31 @@ private struct PastelButtonStyle: ButtonStyle {
     }
 }
 
+/// Taille de feuille `.form` (iPad) rendue plus haute : la hauteur standard coupait le contenu.
+@available(iOS 18.0, macCatalyst 18.0, macOS 15.0, *)
+private struct TallFormSizing: PresentationSizing {
+    /// Hauteur standard d'une feuille `.form` sur iPad, utilisée si le système n'en propose aucune.
+    private static let fallbackFormHeight: CGFloat = 620
+    private static let heightRatio: CGFloat = 1.25
+
+    func proposedSize(for root: PresentationSizingRoot, context: PresentationSizingContext) -> ProposedViewSize {
+        var size = FormPresentationSizing.form.proposedSize(for: root, context: context)
+        size.height = (size.height ?? Self.fallbackFormHeight) * Self.heightRatio
+        return size
+    }
+}
+
 extension View {
+    /// Agrandit de 25 % la hauteur des feuilles sur iPad (sans effet sur iPhone).
+    @ViewBuilder
+    func tallSheetSizing() -> some View {
+        if #available(iOS 18.0, macCatalyst 18.0, macOS 15.0, *) {
+            presentationSizing(TallFormSizing())
+        } else {
+            self
+        }
+    }
+
     /// Enveloppe le contenu dans un panneau Liquid Glass aux coins arrondis.
     /// Se rabat sur une surface pastel sur les versions d'OS sans Liquid Glass.
     @ViewBuilder

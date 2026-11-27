@@ -1,7 +1,7 @@
 {
   "images" : [
     {
-      "filename" : "AppIcon-light.png",
+      "filename" : "Enceinte en bois, égaliseur lumineux.png",
       "idiom" : "universal",
       "platform" : "ios",
       "size" : "1024x1024"
@@ -13,7 +13,7 @@
           "value" : "dark"
         }
       ],
-      "filename" : "AppIcon-dark.png",
+      "filename" : "Icône d’enceinte sombre aux barres lumineuses.png",
       "idiom" : "universal",
       "platform" : "ios",
       "size" : "1024x1024"
@@ -25,7 +25,7 @@
           "value" : "tinted"
         }
       ],
-      "filename" : "AppIcon-tinted.png",
+      "filename" : "Icône Speakerlab en niveaux de gris.png",
       "idiom" : "universal",
       "platform" : "ios",
       "size" : "1024x1024"
